@@ -1,0 +1,11 @@
+
+IMPORTANT:
+FIRST - run in an x64 command prompt. Hit the windows key on your keyboard, type in "x64" it should be the first CMD option that appears.
+SECOND - confirm that emsdk is running/enabled in the "x64" cmd from before.
+    1) Run "emcc --check"
+        1) Should get an message saying that it ran sanity checks, then nothing returns.
+    2) If that doesnt work navigate to the emsdk directory and confirm that emsdk is setup properly in your current "x64" window to get a meaningful output.
+THIRD - Continue with tutorial. At this point(06/23/2024) in time you were here: https://eliemichel.github.io/LearnWebGPU/getting-started/project-setup.html#lit-3
+
+
+
