@@ -1,4 +1,6 @@
 
+Step000
+
 IMPORTANT:
 FIRST - run in an x64 command prompt. Hit the windows key on your keyboard, type in "x64" it should be the first CMD option that appears.
 SECOND - confirm that emsdk is running/enabled in the "x64" cmd from before.
@@ -7,5 +9,20 @@ SECOND - confirm that emsdk is running/enabled in the "x64" cmd from before.
     2) If that doesnt work navigate to the emsdk directory and confirm that emsdk is setup properly in your current "x64" window to get a meaningful output.
 THIRD - Continue with tutorial. At this point(06/23/2024) in time you were here: https://eliemichel.github.io/LearnWebGPU/getting-started/project-setup.html#lit-3
 
+Step001
+
+https://github.com/eliemichel/LearnWebGPU-Code/blob/step001/webgpu/README.md
+
+# Build using wgpu-native backend
+cmake -B build-wgpu -DWEBGPU_BACKEND=WGPU
+cmake --build build-wgpu
+
+# Build using Dawn backend
+cmake -B build-dawn -DWEBGPU_BACKEND=DAWN
+cmake --build build-dawn
+
+# Build using emscripten
+emcmake cmake -B build-emscripten
+cmake --build build-emscripten
 
 
