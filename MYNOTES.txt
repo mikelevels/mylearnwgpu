@@ -25,4 +25,26 @@ cmake --build build-dawn
 emcmake cmake -B build-emscripten
 cmake --build build-emscripten
 
+Step005
+
+The lines to build the code from Step001 are the same. HOWEVER, in order to RUN
+the .wasm output by the emscripten build steps you first need to start a web
+server, THEN it will launch the app/wasm in the Chrome/default web browser.
+
+emrun .\path\to\App.html
+
+Most likely:
+
+emrun .\build-emscripten\App.html
+
+DO NOT FORGET TO CONFIRM THE EMSCRIPTEN BUILD STEPS ARE CORRECT IN CMAKELISTS.TXT
+
+The other lines to 'run' the apps you are making for the other build systems are:
+
+.\build-{buildname}\Debug\App.exe
+
+.\build-dawn\Debug\App.exe
+.\build-wgpu\Debug\App.exe
+
+FOR SOME REASON THE STATIC WEBGPU BUILD FAILS
 

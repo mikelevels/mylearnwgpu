@@ -47,7 +47,7 @@ if(NOT TARGET webgpu)
             GIT_REPOSITORY https://github.com/eliemichel/WebGPU-distribution
             GIT_TAG        wgpu-static # wgpu-static-v0.19.4.1 + fix
         )
-        FetchContent_MakeAvailable(webgpu-backend-wgpu-static)
+        FetchContent_MakeAvailable(webgpu-backend-wgpu)
 
     elseif(WEBGPU_BACKEND_U STREQUAL "DAWN")
 
