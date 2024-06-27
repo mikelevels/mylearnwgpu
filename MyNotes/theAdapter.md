@@ -156,6 +156,7 @@ Like for the WebGPU instance, we must release the adapter:
 ```Cpp
 wgpuAdapterRelease(adapter);
 ```
+Step004
 
 > NOTE:
 > The WebGPU instance is only required for a limited time, it is not needed once we have our adapter. So it is okay to release the instance after the adapter request instead of at the very end. The underlying instance object will keep on living until the adapter gets released but we do not need to manage the object at this point any longer. See the sample High-Level code blocks:
@@ -199,6 +200,44 @@ The adapter object provides information about the underlying implementation, har
 > You forgot/didnt update CMakeLists.txt in the main directory to enable Asynchronous calls between JS and C++.
 > Additionally, you have to call emrun App.html in order for your App.wasm, App.js, and App.html to open in your browser and start running.
 
+# Limits
 
+First list the limits of the adapter with `wgpuAdapterGetLimits`. This function takes in an `WGPUSupportedLimits` object where it writes the limits:
 
+> NOTE: There are implementation divergences between different platforms.
+> That is why there are guards via preprocessor directives to account for the differences in implementations.
 
+Make sure you run the app at this point in your code.
+
+You should see a long list of information about your devices capabilities in the 
+output.
+
+> NOTE:
+> Not all features, or limits available to you are going to be printed on this run through.
+> The full specification is available online. The default values are expected to be the minimum that the adapter offers to support WebGPU.
+
+# Features
+
+Focus on the `wgpuAdapterEnumerateFeatures` function. This provides the list of WebGPU features available in the implementation you are running on.
+
+The first time the function is called we pass in a nullptr, so only the number of features are returned at that point.
+
+Later we dynamically allocate memory for storing that number of items in a result, additionally we pass in a pointer to where the result should be stored.
+
+All of the features are represented by numbers corresponding to the `WGPUFeatureName` defined in `webgpu.h`.
+
+You may notice a few very high numbers that are not defined as an enum in webgpu.h. Those are extensions provided by the native implementation(defined in wgpu.h instead of webgpu.h in the case of wgpu-native).
+
+# Properties
+
+Look at the adapters properties, they contain information we may want to display to the end user.
+
+Check it out for your own device when you have a chance.
+
+# Conclusion
+
+1) The very first thing that needs to happen is you need to get the adapter.
+2) Once you have an adapter check its capabilities, and properties.
+3) In this code learned how to use asynchronous functions and double call enumeration functions.
+
+step005

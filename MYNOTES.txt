@@ -37,6 +37,8 @@ Most likely:
 
 emrun .\build-emscripten\App.html
 
+In order to exit the webserver Ctr-C then respond Y at the prompt.
+
 DO NOT FORGET TO CONFIRM THE EMSCRIPTEN BUILD STEPS ARE CORRECT IN CMAKELISTS.TXT
 
 The other lines to 'run' the apps you are making for the other build systems are:
@@ -47,4 +49,7 @@ The other lines to 'run' the apps you are making for the other build systems are
 .\build-wgpu\Debug\App.exe
 
 FOR SOME REASON THE STATIC WEBGPU BUILD FAILS
+
+Step010
+
 

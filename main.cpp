@@ -60,13 +60,73 @@ WGPUAdapter requestAdapterSync(WGPUInstance instance, WGPURequestAdapterOptions 
 	return userData.adapter;
 };
 
+void inspectAdapter(WGPUAdapter adapter){
+#ifndef __EMSCRIPTEN__
+    // Limits
+    WGPUSupportedLimits supportedLimits = {};
+    supportedLimits.nextInChain = nullptr;
+    bool success  = wgpuAdapterGetLimits(adapter, &supportedLimits);
+    if(success){
+        std::cout<<"Adapter limits: "<<std::endl;
+        std::cout<<" - maxTextureDimension1D: "<<supportedLimits.limits.maxTextureDimension1D <<std::endl;
+        std::cout<<" - maxTextureDimension2D: "<<supportedLimits.limits.maxTextureDimension2D <<std::endl;
+        std::cout<<" - maxTextureDimension3D: "<<supportedLimits.limits.maxTextureDimension3D <<std::endl;
+        std::cout<<" - maxTextureArrayLayers: "<<supportedLimits.limits.maxTextureArrayLayers <<std::endl;
+    }
+#endif // NOT __EMSCRIPTEN__
+
+    //Supported features
+    std::vector<WGPUFeatureName> features;
+
+    //Call the function a first time with a null return address, just to get
+    // the entry count.
+    size_t featureCount = wgpuAdapterEnumerateFeatures(adapter, nullptr);
+
+    //Allocate memory(could be a new, or a malloc() if this were C)
+    features.resize(featureCount);
+
+    // Call the function a second time, with a non-null return address
+    wgpuAdapterEnumerateFeatures(adapter,features.data());
+
+    std::cout<< "Adapter features: "<<std::endl;
+    std::cout<<std::hex;// Integers written as hexadecimeal to ease comparison with webgpu.h literals
+    for(auto f : features){
+        std::cout<<" - 0x"<<f<<std::endl;
+    }
+    std::cout << std::dec; //Output decimals again.
+
+    // Print and store the properties
+    WGPUAdapterProperties properties = {};
+    properties.nextInChain = nullptr;
+    wgpuAdapterGetProperties(adapter, &properties);
+    std::cout << "Adapter properties:"<<std::endl;
+    std::cout << " - vendorID: " << properties.vendorID << std::endl;
+    if(properties.vendorName){
+        std::cout<<" - vendorName: "<<properties.vendorName<<std::endl;
+    }
+    if(properties.architecture){
+        std::cout<<" - architecture: "<<properties.architecture<<std::endl;
+    }
+    std::cout<<" - deviceID: "<<properties.deviceID<<std::endl;
+    if(properties.name){
+        std::cout<<" - name: "<<properties.name<<std::endl;
+    }
+    if(properties.driverDescription){
+        std::cout<<" - driverDescription: " << properties.driverDescription <<std::endl;
+    }
+    std::cout << std::hex;
+    std::cout << " - adapterType: 0x" << properties.adapterType << std::endl;
+    std::cout << " - backendType: 0x" << properties.backendType <<std::endl;
+    std::cout<<std::dec; // Back to decimals
+};
+
 int main(int, char**){
     // Generate a descriptor
     WGPUInstanceDescriptor desc = {};
     desc.nextInChain = nullptr;
 #ifdef WEBGPU_BACKEND_EMSCRIPTEN
     WGPUInstance instance = wgpuCreateInstance(nullptr);
-#else // WEBGPU_BACKEND_EMSCRIPTENa
+#else // WEBGPU_BACKEND_EMSCRIPTEN
     // Create the instance using the descriptor
     WGPUInstance instance = wgpuCreateInstance(&desc);
 #endif // WEBGPU_BACKEND_EMSCRIPTEN
@@ -95,6 +155,8 @@ int main(int, char**){
     // Release the instance. It is no longer explicitly used. The instance persists
     // until the adapter gets destroyed.
     wgpuInstanceRelease(instance);
+
+    inspectAdapter(adapter);
 
     wgpuAdapterRelease(adapter);
 
