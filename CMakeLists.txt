@@ -11,7 +11,11 @@ include(utils.cmake)
 add_subdirectory(webgpu)
 
 # We specify that we want to create a target of type executable, called "App"
-add_executable(App main.cpp)
+add_executable(App 
+		main.cpp
+		webgpu-utils.h
+		webgpu-utils.cpp
+)
 
 # Add webgpu target as a dependency of our app
 target_link_libraries(App PRIVATE webgpu)

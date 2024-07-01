@@ -49,7 +49,15 @@ The other lines to 'run' the apps you are making for the other build systems are
 .\build-wgpu\Debug\App.exe
 
 FOR SOME REASON THE STATIC WEBGPU BUILD FAILS
+ADDITIONALLY EMSCRIPTEN BUILD DOES NOT RETURN DEVICE LIMITS IN BROWSER BUT
+EVERYTHING ELSE WAS FINE. FOUND SOMETHING YOU MAY NEED TO USE INSTEAD CALLED
+NAVIGATORGPU WHEN USING EMSCRIPTEN.
 
 Step010
+
+CONFIRMED All builds except wgpu-static appeared to work without issue. emscripten
+did return the device limits AFTER the device structure was in memory. Not printed
+during the adapter stage of initialization.
+
 
 
