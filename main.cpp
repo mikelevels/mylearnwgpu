@@ -1,9 +1,13 @@
 #include "webgpu-utils.h"
 
+#include <glfw3webgpu.h>
+
 #include <webgpu/webgpu.h>
 #ifdef WEBGPU_BACKEND_WGPU
     #include <webgpu/wgpu.h>
 #endif
+
+#include <GLFW/glfw3.h>
 
 #include <iostream>
 #include <vector>
@@ -13,7 +17,52 @@
     #include <emscripten.h>
 #endif
 
-int main(int, char**){
+/**
+ * Main application class, that holds the whole app state and regroups
+ * init/main loop/terminate functions.
+ */
+class Application{
+    public:
+        //Initialize everything return true on success
+        bool Initialize();
+
+        //Uninitialize everything
+        void Terminate();
+
+        // Draw a frame, handle events
+        void MainLoop();
+
+        // Return true as long as the main loop should keep running
+        bool IsRunning();
+
+    private:
+        // All variables shared in the public interface to this class
+        GLFWwindow *window;
+        WGPUSurface surface;
+        WGPUDevice device;
+        WGPUQueue queue;
+};
+
+bool Application::Initialize(){
+    std::cout<<"Opening window..."<<std::endl;
+
+    if(!glfwInit()){
+        std::cerr<<"Could not initialize GLFW!"<<std::endl;
+        return 1;
+    }
+
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+    window = glfwCreateWindow(640, 480, "Learn WebGPU", nullptr, nullptr);
+
+    if(!window){
+        std::cerr <<"Could not open window!"<<std::endl;
+        glfwTerminate();
+        return 1;
+    }
+
+    std::cout << "GLFW window: "<< window<<std::endl;
+
     // Generate a descriptor
     WGPUInstanceDescriptor desc = {};
     desc.nextInChain = nullptr;
@@ -47,17 +96,22 @@ int main(int, char**){
         return 1;
     }
 
-    std::cout<< "Requesting adapter..."<<std::endl;
+    std::cout<< "Getting surface..."<<std::endl;
+    surface = glfwGetWGPUSurface(instance, window);
+    std::cout<< "WGPU surface: "<<surface<<std::endl;
 
-    WGPURequestAdapterOptions adapterOpts = {};
-    adapterOpts.nextInChain = nullptr;
-    WGPUAdapter adapter = requestAdapterSync(instance, &adapterOpts);
+    std::cout << "Requesting adapter..." << std::endl;
 
-    std::cout<<"Got adapter: "<<adapter<<std::endl;
-
+	WGPURequestAdapterOptions adapterOpts = {};
+	adapterOpts.nextInChain = nullptr;
+	adapterOpts.compatibleSurface = surface;
+	//                              ^^^^^^^ Use the surface here
+	WGPUAdapter adapter = requestAdapterSync(instance, &adapterOpts);
     // Release the instance. It is no longer explicitly used. The instance persists
-    // until the adapter gets destroyed.
-    wgpuInstanceRelease(instance);
+    // until the adapter gets destroyed. THIS DOES NOT NEED TO OCCUR IN TERMINATE
+	wgpuInstanceRelease(instance);
+
+	std::cout << "Got adapter: " << adapter << std::endl;
 
     inspectAdapter(adapter);
 
@@ -78,7 +132,8 @@ int main(int, char**){
         std::cout<<std::endl;
     };;
 
-    WGPUDevice device = requestDeviceSync(adapter, &deviceDesc);
+    // THIS IS A CLASS MEMBER NOW, it is initialized/called without the type because it is a class member now
+    device = requestDeviceSync(adapter, &deviceDesc);
 
     std::cout<<"Got device: "<<device<<std::endl;
 
@@ -96,8 +151,8 @@ int main(int, char**){
     };
     wgpuDeviceSetUncapturedErrorCallback(device, onDeviceError, nullptr/*pUserData*/);
 
-    //Get the queue to send data and commands to the GPU
-    WGPUQueue queue = wgpuDeviceGetQueue(device);
+    //Get the queue to send data and commands to the GPU, THIS IS A CLASS MEMBER NOW
+    queue = wgpuDeviceGetQueue(device);
 
     //Set up a callback to be executed once all queued work is done.
     auto onQueueWorkDone = [](WGPUQueueWorkDoneStatus status, void* /*pUserData*/){
@@ -128,18 +183,51 @@ int main(int, char**){
     wgpuCommandBufferRelease(command);
     std::cout<<"Command submitted."<<std::endl;
 
-    for(int i=0; i<5; ++i){
-        std::cout<<"Tick/Poll device..."<<std::endl;
-#if defined(WEBGPU_BACKEND_DAWN)
-        wgpuDeviceTick(device);
-#elif defined(WEBGPU_BACKEND_WGPU)
-        wgpuDevicePoll(device, false, nullptr);
-#elif defined(WEBGPU_BACKEND_EMSCRIPTEN)
-        emscripten_sleep(100);
-#endif
-    }
+    return true;
+}
 
+void Application::Terminate(){
     wgpuQueueRelease(queue);
     wgpuDeviceRelease(device);
+    wgpuSurfaceRelease(surface);
+    glfwDestroyWindow(window);
+    glfwTerminate();
+}
+
+void Application::MainLoop(){
+    //Check whether the user clicked on the close button (and any other
+    // mouse/key event, which we don't use so far)
+    glfwPollEvents();
+
+    //Also move here the tick/poll but NOT the emscripten sleep
+#if defined(WEBGPU_BACKEND_DAWN)
+    wgpuDeviceTick(device);
+#elif defined(WEBGPU_BACKEND_WGPU)
+    wgpuDevicePoll(device, false, nullptr);
+#endif
+}
+
+bool Application::IsRunning(){
+    return !glfwWindowShouldClose(window);
+}
+
+int main(int, char**){
+    Application app;
+
+    if(!app.Initialize()){
+        return 1;
+    }
+
+#ifdef __EMSCRIPTEN__
+    emscripten_set_main_loop_arg([](void * arg){
+        Application * pApp = reinterpret_cast<Application*>(arg);
+        pApp->MainLoop();
+    }, &app, 0, true);
+#else
+    while(app.IsRunning()){
+        app.MainLoop();
+    }
+#endif
+
     return 0;
 }

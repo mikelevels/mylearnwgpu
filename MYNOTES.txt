@@ -59,5 +59,12 @@ CONFIRMED All builds except wgpu-static appeared to work without issue. emscript
 did return the device limits AFTER the device structure was in memory. Not printed
 during the adapter stage of initialization.
 
+Step020
+
+CONFIRMED All builds except wgpu-static appeared to work without issue. The only
+difference was that emscripten returned a black window, not a white one. It was a
+window of the correct size though! So this serves as an indication that it worked
+out. Not really interested in a static build if all the other builds are working.
+
 
 

@@ -7,8 +7,20 @@ project(
 
 include(utils.cmake)
 
+# Include glfw directory, to define the 'glfw' target
+if(NOT EMSCRIPTEN)
+	add_subdirectory(glfw)
+else()
+	# Emscripted has built-in support for GLFW but requires the `-sUSE_GLFW=3` link option:
+	add_library(glfw INTERFACE)
+	target_link_options(glfw INTERFACE -sUSE_GLFW=3)
+endif()
+
 # Include webgpu directory, to define the 'webgpu' target
 add_subdirectory(webgpu)
+
+# Include the glfw/webgpu extension
+add_subdirectory(glfw3webgpu)
 
 # We specify that we want to create a target of type executable, called "App"
 add_executable(App 
@@ -18,7 +30,7 @@ add_executable(App
 )
 
 # Add webgpu target as a dependency of our app
-target_link_libraries(App PRIVATE webgpu)
+target_link_libraries(App PRIVATE webgpu glfw glfw3webgpu)
 
 # The application's binary must find wgpu.dll or libgw.so at runtime,
 # So it is automatically copied(its called WGPU_RUNTIME_LIB in general)
