@@ -23,10 +23,11 @@ add_subdirectory(webgpu)
 add_subdirectory(glfw3webgpu)
 
 # We specify that we want to create a target of type executable, called "App"
+# REMOVE:
+# webgpu-utils.h
+# webgpu-utils.cpp
 add_executable(App 
 		main.cpp
-		webgpu-utils.h
-		webgpu-utils.cpp
 )
 
 # Add webgpu target as a dependency of our app

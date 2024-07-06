@@ -72,3 +72,27 @@ date branches.
 
 REWRITING EVERYTHING NOW TO REFLECT MOST RECENT BRANCHES.
 
+Step 025
+
+The differences in color are due to dawn and emscripten in Chrome(also just dawn)
+operating in different colorspaces than wgpu-native.
+
+After correcting all of your code to reflect the non-next suffix branches the only
+other major change was the #ifndef __EMSCRIPTEN__ #endif block!!! Without this key
+section the code throws an exception in the Chrome(dawn implementation) browser.
+
+The solution was in the webbook. Michel updated the code with a commit with the 
+appropriate change to resolve the issue.
+
+NOTE the critical block is in Application::MainLoop() around line 170-ish.
+
+Step028
+
+CRITICAL:
+Intellisense does not reflect the expected behavior of the build output and or the
+code generated during the build process.
+
+Carefully confirm the spelling of everything. Intellisense cannot be relied on for
+the remainder of the project.
+
+
