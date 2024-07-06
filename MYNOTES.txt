@@ -66,5 +66,9 @@ difference was that emscripten returned a black window, not a white one. It was 
 window of the correct size though! So this serves as an indication that it worked
 out. Not really interested in a static build if all the other builds are working.
 
+IMPORTANT: All of the code in the "-next" branches are actually older than the non
+-suffixed branches. You need to rewrite your code to correspond with the most up to
+date branches.
 
+REWRITING EVERYTHING NOW TO REFLECT MOST RECENT BRANCHES.
 

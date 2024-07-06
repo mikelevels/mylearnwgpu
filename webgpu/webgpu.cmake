@@ -2,6 +2,7 @@
 include(FetchContent)
 
 set(WEBGPU_BACKEND "WGPU" CACHE STRING "Backend implementation of WebGPU. Possible values are EMSCRIPTEN, WGPU, WGPU_STATIC and DAWN (it does not matter when using emcmake)")
+set_property(CACHE WEBGPU_BACKEND PROPERTY STRINGS EMSCRIPTEN WGPU WGPU_STATIC DAWN)
 
 # FetchContent's GIT_SHALLOW option is buggy and does not actually do a shallow
 # clone. This macro takes care of it.
@@ -22,45 +23,45 @@ endmacro()
 if(NOT TARGET webgpu)
     string(TOUPPER ${WEBGPU_BACKEND} WEBGPU_BACKEND_U)
 
-    if(EMSCRIPTEN OR WEBGPU_BACKEND_U STREQUAL "EMSCRIPTEN")
+	if (EMSCRIPTEN OR WEBGPU_BACKEND_U STREQUAL "EMSCRIPTEN")
 
-        FetchContent_DeclareShallowGit(
-            webgpu-backend-emscripten
-            GIT_REPOSITORY https://github.com/eliemichel/WebGPU-distribution
-            GIT_TAG        emscripten # emscripten-v3.1.61 + fix
-        )
-        FetchContent_MakeAvailable(webgpu-backend-emscripten)
+		FetchContent_DeclareShallowGit(
+			webgpu-backend-emscripten
+			GIT_REPOSITORY https://github.com/eliemichel/WebGPU-distribution
+			GIT_TAG        e0038567ca1e35ffa9a848760eb6c49450264305 # emscripten-v3.1.61 + fix
+		)
+		FetchContent_MakeAvailable(webgpu-backend-emscripten)
 
-    elseif (WEBGPU_BACKEND_U STREQUAL "WGPU")
+	elseif (WEBGPU_BACKEND_U STREQUAL "WGPU")
 
-        FetchContent_DeclareShallowGit(
-            webgpu-backend-wgpu
-            GIT_REPOSITORY https://github.com/eliemichel/WebGPU-distribution
-            GIT_TAG        wgpu # wgpu-v0.19.4.1 + fix
-        )
-        FetchContent_MakeAvailable(webgpu-backend-wgpu)
+		FetchContent_DeclareShallowGit(
+			webgpu-backend-wgpu
+			GIT_REPOSITORY https://github.com/eliemichel/WebGPU-distribution
+			GIT_TAG        ac055bef9d8c37f28e7706e4bd32153cbc0c210f # wgpu-v0.19.4.1 + fix
+		)
+		FetchContent_MakeAvailable(webgpu-backend-wgpu)
 
-    elseif( WEBGPU_BACKEND_U STREQUAL "WGPU_STATIC")
+	elseif (WEBGPU_BACKEND_U STREQUAL "WGPU_STATIC")
 
-        FetchContent_DeclareShallowGit(
-            webgpu-backend-dawn
-            GIT_REPOSITORY https://github.com/eliemichel/WebGPU-distribution
-            GIT_TAG        wgpu-static # wgpu-static-v0.19.4.1 + fix
-        )
-        FetchContent_MakeAvailable(webgpu-backend-wgpu)
+		FetchContent_DeclareShallowGit(
+			webgpu-backend-wgpu-static
+			GIT_REPOSITORY https://github.com/eliemichel/WebGPU-distribution
+			GIT_TAG        3612311d4df171027513a3ad5dcd8a77d93c447f # wgpu-static-v0.19.4.1 + fix
+		)
+		FetchContent_MakeAvailable(webgpu-backend-wgpu-static)
 
-    elseif(WEBGPU_BACKEND_U STREQUAL "DAWN")
+	elseif (WEBGPU_BACKEND_U STREQUAL "DAWN")
 
-        FetchContent_DeclareShallowGit(
-            webgpu-backend-dawn
-            GIT_REPOSITORY https://github.com/eliemichel/WebGPU-distribution
-            GIT_TAG        dawn# dawn-6536 + fix
-        )
-        FetchContent_MakeAvailable(webgpu-backend-dawn)
+		FetchContent_DeclareShallowGit(
+			webgpu-backend-dawn
+			GIT_REPOSITORY https://github.com/eliemichel/WebGPU-distribution
+			GIT_TAG        f49f0f3f6784a86a85944600d66f743e0c7eb4a9 # dawn-6536 + fix
+		)
+		FetchContent_MakeAvailable(webgpu-backend-dawn)
 
-    else()
+	else()
 
-        message(FATAL_ERROR "Invalid value for WEBGPU_BACKEND: possible values are EMSCRIPTEN, WGPU, WGPU_STATIC and DAWN, but '${WEBGPU_BACKEND_U}' was provided.")
+		message(FATAL_ERROR "Invalid value for WEBGPU_BACKEND: possible values are EMSCRIPTEN, WGPU, WGPU_STATIC and DAWN, but '${WEBGPU_BACKEND_U}' was provided.")
 
-    endif()
+	endif()
 endif()
