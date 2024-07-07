@@ -100,3 +100,7 @@ Step030_cpp
 ADDED: Suffix "_cpp" to commits/branch note blocks. There are alternative brnaches
 available with suffix "-vanilla". These alternative branches refer to the raw C API
 implementation of the WGPU interface. 
+
+Any additonal notes in this commit follow:
+
+
