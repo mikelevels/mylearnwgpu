@@ -1,5 +1,0 @@
-C:/Users/gonza/Dev/Practice/MyLearnWebGPU/build/CMakeFiles/App.dir
-C:/Users/gonza/Dev/Practice/MyLearnWebGPU/build/CMakeFiles/ALL_BUILD.dir
-C:/Users/gonza/Dev/Practice/MyLearnWebGPU/build/CMakeFiles/ZERO_CHECK.dir
-C:/Users/gonza/Dev/Practice/MyLearnWebGPU/build/webgpu/CMakeFiles/ALL_BUILD.dir
-C:/Users/gonza/Dev/Practice/MyLearnWebGPU/build/_deps/webgpu-backend-wgpu-build/CMakeFiles/ALL_BUILD.dir

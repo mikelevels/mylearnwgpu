@@ -11,8 +11,8 @@
 #endif
 
 #include <iostream>
-#include <vector>
 #include <cassert>
+#include <vector>
 
 // Here is the source code for the shader module!! Hello Triangle here we come!!
 const char* shaderSource = R"(
@@ -34,6 +34,19 @@ fn fs_main() -> @location(0) vec4f{
 	return vec4f(0.0,0.4,1.0,1.0);
 }
 )";
+
+//A function that hides implementation specific variants of device polling:
+void wgpuPollEvents([[maybe_unused]] wgpu::Device device,[[maybe_unused]] bool yieldToWebBrowser){
+#if defined(WEBGPU_BACKEND_DAWN)
+	device.tick();
+#elif defined(WEBGPU_BACKEND_WGPU)
+	device.poll(false);
+#elif defined(WEBGPU_BACKEND_EMSCRIPTEN)
+	if(yieldToWebBrowser){
+		emscripten_sleep(100);
+	}
+#endif
+}
 
 /**
  * Main application class, that holds the whole app state and regroups
@@ -57,6 +70,8 @@ class Application{
         wgpu::TextureView GetNextSurfaceTextureView();
 		//Substep of Initilize() that creates the render pipeline
 		void InitializePipeline();
+		//Simple buffers walkthrough
+		void PlayingWithBuffers();
         // All variables shared in the public interface to this class
         GLFWwindow *window;
         wgpu::Device device;
@@ -66,6 +81,29 @@ class Application{
 		wgpu::TextureFormat surfaceFormat = wgpu::TextureFormat::Undefined;
 		wgpu::RenderPipeline pipeline;
 };
+
+int main(int, char**){
+    Application app;
+
+    if(!app.Initialize()){
+        return 1;
+    }
+
+#ifdef __EMSCRIPTEN__
+//Equivalent of the main loop when using emscripten
+    auto callback = [](void * arg){
+        Application * pApp = reinterpret_cast<Application*>(arg);
+        pApp->MainLoop();
+    };
+    emscripten_set_main_loop_arg(callback, &app,0,true);
+#else
+    while(app.IsRunning()){
+        app.MainLoop();
+    }
+#endif
+
+    return 0;
+}
 
 bool Application::Initialize(){
 	// Open window
@@ -115,7 +153,7 @@ bool Application::Initialize(){
 	// Configuration of the textures created for the underlying swap chain
 	config.width = 640;
 	config.height = 480;
-	config.usage = WGPUTextureUsage_RenderAttachment;
+	config.usage = wgpu::TextureUsage::RenderAttachment;
 	surfaceFormat = surface.getPreferredFormat(adapter);
 	config.format = surfaceFormat;
 
@@ -132,6 +170,8 @@ bool Application::Initialize(){
 	adapter.release();
 
 	InitializePipeline();
+
+	PlayingWithBuffers();
 
 	return true;
 }
@@ -202,9 +242,9 @@ void Application::MainLoop(){
 
 	// At the end of the frame
 	targetView.release();
-    #ifndef __EMSCRIPTEN__
+#ifndef __EMSCRIPTEN__
 	surface.present();
-    #endif
+#endif
 
 #if defined(WEBGPU_BACKEND_DAWN)
 	device.tick();
@@ -337,25 +377,75 @@ void Application::InitializePipeline(){
 	shaderModule.release();
 }
 
-int main(int, char**){
-    Application app;
+void Application::PlayingWithBuffers(){
+	//Experimentation for the "Playing with buffer" chapter
+	wgpu::BufferDescriptor bufferDesc;
+	bufferDesc.label = "Some GPU-side data buffer";
+	bufferDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::CopySrc;
+	bufferDesc.size = 16;
+	bufferDesc.mappedAtCreation = false;
+	wgpu::Buffer buffer1 = device.createBuffer(bufferDesc);
+	bufferDesc.label = "Output buffer";
+	bufferDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
+	wgpu::Buffer buffer2 = device.createBuffer(bufferDesc);
 
-    if(!app.Initialize()){
-        return 1;
-    }
+	// Create some CPU-side data buffer (of size 16 bytes)
+	std::vector<uint8_t> numbers(16);
+	for (uint8_t i = 0; i<16; ++i) numbers[i] = i;
+	// 'numbers now contains the sequence [0,1,...,15]
 
-#ifdef __EMSCRIPTEN__
-//Equivalent of the main loop when using emscripten
-    auto callback = [](void * arg){
-        Application * pApp = reinterpret_cast<Application*>(arg);
-        pApp->MainLoop();
-    };
-    emscripten_set_main_loop_arg(callback, &app,0,true);
-#else
-    while(app.IsRunning()){
-        app.MainLoop();
-    }
-#endif
+	//Copy this from `numbers` (RAM) to `buffer1` (VRAM)
+	queue.writeBuffer(buffer1, 0, numbers.data(), numbers.size());
 
-    return 0;
+	wgpu::CommandEncoder encoder = device.createCommandEncoder(wgpu::Default);
+
+	//After creating the command encoder
+	encoder.copyBufferToBuffer(buffer1, 0, buffer2, 0, 16);
+
+	wgpu::CommandBuffer command = encoder.finish(wgpu::Default);
+	encoder.release();
+	queue.submit(1, &command);
+	command.release();
+
+	//The context shared between this main function and the callback.
+	struct Context{
+		bool ready;
+		wgpu::Buffer buffer;
+	};
+
+	auto onBuffer2Mapped = [](WGPUBufferMapAsyncStatus status, void* pUserData){
+		Context* context = reinterpret_cast<Context*>(pUserData);
+		context->ready = true;
+		std::cout<<"Buffer 2 mapped with status "<< status<< std::endl;
+		if(status != wgpu::BufferMapAsyncStatus::Success) return;
+
+		//Get a pointer to wherever the driver mapped the GPU memory to the RAM
+		uint8_t* bufferData = (uint8_t*)context->buffer.getConstMappedRange(0,16);
+
+		std::cout << "bufferData=[";
+		for(int i=0; i<16; ++i){
+			if(i>0) std::cout<<", ";
+			std::cout<<(int)bufferData[i];
+		}
+		std::cout<<"]"<<std::endl;
+
+		// Then do not forget to unmap the memory
+		context->buffer.unmap();
+	};
+
+	//Create the Context instance
+
+	Context context = {false, buffer2};
+
+	wgpuBufferMapAsync(buffer2, wgpu::MapMode::Read, 0, 16, onBuffer2Mapped, (void*)&context);
+	//					 	  Pass the address of the Context instance here: ^^^^^^^^^^^^^^^
+
+	while(!context.ready){
+		// ^^^^^^^^^^^^^ Use context.ready here instead of ready
+		wgpuPollEvents(device, true /* yieldToBrowser */);
+	}
+
+	//In Terminate()
+	buffer1.release();
+	buffer2.release();
 }

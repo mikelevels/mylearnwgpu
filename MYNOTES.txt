@@ -103,4 +103,33 @@ implementation of the WGPU interface.
 
 Any additonal notes in this commit follow:
 
+ALL NECESSARY BUILDS RUN AS EXPECTED.
+
+Step031_cpp
+
+So far everything was fine until you found some minor differences between your code
+and Michel's code. Until you encountered `Default`. Turns out it was most likely
+something living in wgpu::. But it wasnt appearing at all before?
+
+Maybe you need to clean all builds before building again? Could this lead to issues
+with name resolution? There is a problem with name resolution in VSCode 
+intellisense, but it couldnt find a common wrapper end point in a namespace?
+
+The issue is resolved. You are not certain if it happened due to you manually 
+cleaning up it right now. The following ran without an issue:
+    wgpu
+    Dawn
+    emscripten
+
+The only build that does not work is wgpu-static.
+
+NOTE: After cleaning the builds you had a hard time rebuilding Dawn. This was most
+likely due to your slow internet connection. It was only resolved after cleaning 
+Dawn and rebuilding it as you usually do one more time!
+
+Step032_cpp
+
+
+    
+
 
