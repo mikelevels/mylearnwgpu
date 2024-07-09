@@ -14,19 +14,11 @@
 #include <cassert>
 #include <vector>
 
-// Here is the source code for the shader module!! Hello Triangle here we come!!
+// We embed the source of the shader module here
 const char* shaderSource = R"(
 @vertex
-fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> @builtin(position) vec4f{
-	var p = vec2f(0.0, 0.0);
-	if(in_vertex_index == 0u){
-		p = vec2f(-0.5,-0.5);
-	} else if(in_vertex_index == 1u){
-		p = vec2f(0.5,-0.5);
-	} else {
-		p = vec2f(0.0,0.5);
-	}
-	return vec4f(p,0.0,1.0);
+fn vs_main(@location(0) in_vertex_position: vec2f) -> @builtin(position) vec4f{
+	return vec4f(in_vertex_position, 0.0, 1.0);
 }
 
 @fragment
@@ -34,19 +26,6 @@ fn fs_main() -> @location(0) vec4f{
 	return vec4f(0.0,0.4,1.0,1.0);
 }
 )";
-
-//A function that hides implementation specific variants of device polling:
-void wgpuPollEvents([[maybe_unused]] wgpu::Device device,[[maybe_unused]] bool yieldToWebBrowser){
-#if defined(WEBGPU_BACKEND_DAWN)
-	device.tick();
-#elif defined(WEBGPU_BACKEND_WGPU)
-	device.poll(false);
-#elif defined(WEBGPU_BACKEND_EMSCRIPTEN)
-	if(yieldToWebBrowser){
-		emscripten_sleep(100);
-	}
-#endif
-}
 
 /**
  * Main application class, that holds the whole app state and regroups
@@ -70,8 +49,8 @@ class Application{
         wgpu::TextureView GetNextSurfaceTextureView();
 		//Substep of Initilize() that creates the render pipeline
 		void InitializePipeline();
-		//Simple buffers walkthrough
-		void PlayingWithBuffers();
+		wgpu::RequiredLimits GetRequiredLimits(wgpu::Adapter adapter) const;
+		void InitializeBuffers();
         // All variables shared in the public interface to this class
         GLFWwindow *window;
         wgpu::Device device;
@@ -80,6 +59,8 @@ class Application{
 		std::unique_ptr<wgpu::ErrorCallback> uncapturedErrorCallbackHandle;
 		wgpu::TextureFormat surfaceFormat = wgpu::TextureFormat::Undefined;
 		wgpu::RenderPipeline pipeline;
+		wgpu::Buffer vertexBuffer;
+		uint32_t vertexCount;
 };
 
 int main(int, char**){
@@ -114,6 +95,7 @@ bool Application::Initialize(){
 	
 	wgpu::Instance instance = wgpuCreateInstance(nullptr);
 	
+	//Get adapter
 	std::cout << "Requesting adapter..." << std::endl;
 	surface = glfwGetWGPUSurface(instance, window);
 	wgpu::RequestAdapterOptions adapterOpts = {};
@@ -135,10 +117,13 @@ bool Application::Initialize(){
 		if (message) std::cout << " (" << message << ")";
 		std::cout << std::endl;
 	};
-
+	//Before adapter.requestDevice(deviceDesc)
+	wgpu::RequiredLimits requiredLimits = GetRequiredLimits(adapter);
+	deviceDesc.requiredLimits = &requiredLimits;
 	device = adapter.requestDevice(deviceDesc);
 	std::cout << "Got device: " << device << std::endl;
 	
+	//Device error callback
 	uncapturedErrorCallbackHandle = device.setUncapturedErrorCallback([](wgpu::ErrorType type, char const* message){
 		std::cout<<"Uncaptured device error: type "<< type;
 		if(message)std::cout<<"("<<message<<")";
@@ -170,14 +155,12 @@ bool Application::Initialize(){
 	adapter.release();
 
 	InitializePipeline();
-
-	PlayingWithBuffers();
-
+	InitializeBuffers();
 	return true;
 }
 
 void Application::Terminate(){
-    // Unconfigure the surface
+	vertexBuffer.release();
 	pipeline.release();
 	surface.unconfigure();
 	queue.release();
@@ -218,13 +201,16 @@ void Application::MainLoop(){
 	renderPassDesc.depthStencilAttachment = nullptr;
 	renderPassDesc.timestampWrites = nullptr;
 
-	// Create the render pass and end it immediately (we only clear the screen but do not draw anything)
 	wgpu::RenderPassEncoder renderPass = encoder.beginRenderPass(renderPassDesc);
 
 	//Select which render pipeline to use
 	renderPass.setPipeline(pipeline);
-	//Draw 1 instance of a 3-vertices shape
-	renderPass.draw(3,1,0,0);
+
+	//Set vertex buffer while encoding the render pass
+	renderPass.setVertexBuffer(0, vertexBuffer, 0, vertexBuffer.getSize());
+
+	//We use the `vertexCount` variable instead of hard-coding the vertex count
+	renderPass.draw(vertexCount, 1, 0,0);
 
 	renderPass.end();
 	renderPass.release();
@@ -302,9 +288,27 @@ void Application::InitializePipeline(){
 	//Create the render pipeline
 	wgpu::RenderPipelineDescriptor pipelineDesc;
 
-	//Do not use any vertex buffer for this simple example
-	pipelineDesc.vertex.bufferCount = 0;
-	pipelineDesc.vertex.buffers = nullptr;
+	//Configure the vertex pipeline
+	//We use one vertex buffer
+	wgpu::VertexBufferLayout vertexBufferLayout;
+	wgpu::VertexAttribute positionAttrib;
+	// == For each attribute, describe its layout, i.e., how to interpret the raw data ==
+	// Corresponds to @location(...)
+	positionAttrib.shaderLocation = 0;
+	//Means vec2f in the shader
+	positionAttrib.format = wgpu::VertexFormat::Float32x2;
+	//Index of the first element
+	positionAttrib.offset = 0;
+
+	vertexBufferLayout.attributeCount =1;
+	vertexBufferLayout.attributes = &positionAttrib;
+
+	// == Common to attributes from the same buffer ==
+	vertexBufferLayout.arrayStride = 2*sizeof(float);
+	vertexBufferLayout.stepMode = wgpu::VertexStepMode::Vertex;
+
+	pipelineDesc.vertex.bufferCount = 1;
+	pipelineDesc.vertex.buffers = &vertexBufferLayout;
 
 	//Defined the 'shaderModule' in the second part of this chapter
 	// Here we tell that the programmable vertex shader stage is described
@@ -377,75 +381,69 @@ void Application::InitializePipeline(){
 	shaderModule.release();
 }
 
-void Application::PlayingWithBuffers(){
-	//Experimentation for the "Playing with buffer" chapter
+wgpu::RequiredLimits Application::GetRequiredLimits(wgpu::Adapter adapter) const{
+	//Get adapter supported limits, in case we need them
+	wgpu::SupportedLimits supportedLimits;
+	adapter.getLimits(&supportedLimits);
+
+	//Don't forget to = Default
+	wgpu::RequiredLimits requiredLimits = wgpu::Default;
+
+	//We use at most 1 vertex attribute for now
+	requiredLimits.limits.maxVertexAttributes = 1;
+	//We should also tell that we use 1 vertex buffers
+	requiredLimits.limits.maxVertexBuffers = 1;
+	//Maximum size of a buffer is 6 vertices of 2 float each
+	requiredLimits.limits.maxBufferSize = 6*2*sizeof(float);
+	//Maximum stride between 2 consecutive vertices in the vertex buffer
+	requiredLimits.limits.maxVertexBufferArrayStride = 2*sizeof(float);
+	// Recent addition to the code to try and resolve the issue:
+	requiredLimits.limits.minUniformBufferOffsetAlignment = supportedLimits.limits.minUniformBufferOffsetAlignment;
+	requiredLimits.limits.minStorageBufferOffsetAlignment = supportedLimits.limits.minStorageBufferOffsetAlignment;
+
+	// Attempting a hot fix. The new error posted was complaining about the request
+	// for a texture that exceeded the limits available during surface configuration
+	/*
+	 Just before call to surface.configure(config).
+thread '<unnamed>' panicked at src\lib.rs:586:5:
+Error in wgpuSurfaceConfigure: Validation Error
+
+Caused by:
+    `Surface` width and height must be within the maximum supported texture size. Requested was (640, 480), maximum extent is 0.
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+	*/
+
+	requiredLimits.limits.maxTextureDimension1D = 680;
+	requiredLimits.limits.maxTextureDimension2D = 680;
+	requiredLimits.limits.maxTextureDimension3D = 680;
+
+	return(requiredLimits);
+}
+
+void Application::InitializeBuffers(){
+	//Vertex buffer data
+	//There are 2 floats per vertex, one for x and one for y.
+	std::vector<float> vertexData = {
+		//Define a first triangle:
+		-0.5, -0.5,
+		+0.5, -0.5,
+		+0.0, +0.5,
+
+		//Add a second triangle:
+		-0.55f, -0.5,
+		-0.05f, +0.5,
+		-0.55f, +0.5
+	};
+	vertexCount = static_cast<uint32_t>(vertexData.size()/2);
+
+	//Create a vertex buffer
 	wgpu::BufferDescriptor bufferDesc;
-	bufferDesc.label = "Some GPU-side data buffer";
-	bufferDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::CopySrc;
-	bufferDesc.size = 16;
+	bufferDesc.size = vertexData.size()*sizeof(float);
+	bufferDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Vertex;// Vertex usage here!
 	bufferDesc.mappedAtCreation = false;
-	wgpu::Buffer buffer1 = device.createBuffer(bufferDesc);
-	bufferDesc.label = "Output buffer";
-	bufferDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-	wgpu::Buffer buffer2 = device.createBuffer(bufferDesc);
+	vertexBuffer = device.createBuffer(bufferDesc);
 
-	// Create some CPU-side data buffer (of size 16 bytes)
-	std::vector<uint8_t> numbers(16);
-	for (uint8_t i = 0; i<16; ++i) numbers[i] = i;
-	// 'numbers now contains the sequence [0,1,...,15]
-
-	//Copy this from `numbers` (RAM) to `buffer1` (VRAM)
-	queue.writeBuffer(buffer1, 0, numbers.data(), numbers.size());
-
-	wgpu::CommandEncoder encoder = device.createCommandEncoder(wgpu::Default);
-
-	//After creating the command encoder
-	encoder.copyBufferToBuffer(buffer1, 0, buffer2, 0, 16);
-
-	wgpu::CommandBuffer command = encoder.finish(wgpu::Default);
-	encoder.release();
-	queue.submit(1, &command);
-	command.release();
-
-	//The context shared between this main function and the callback.
-	struct Context{
-		bool ready;
-		wgpu::Buffer buffer;
-	};
-
-	auto onBuffer2Mapped = [](WGPUBufferMapAsyncStatus status, void* pUserData){
-		Context* context = reinterpret_cast<Context*>(pUserData);
-		context->ready = true;
-		std::cout<<"Buffer 2 mapped with status "<< status<< std::endl;
-		if(status != wgpu::BufferMapAsyncStatus::Success) return;
-
-		//Get a pointer to wherever the driver mapped the GPU memory to the RAM
-		uint8_t* bufferData = (uint8_t*)context->buffer.getConstMappedRange(0,16);
-
-		std::cout << "bufferData=[";
-		for(int i=0; i<16; ++i){
-			if(i>0) std::cout<<", ";
-			std::cout<<(int)bufferData[i];
-		}
-		std::cout<<"]"<<std::endl;
-
-		// Then do not forget to unmap the memory
-		context->buffer.unmap();
-	};
-
-	//Create the Context instance
-
-	Context context = {false, buffer2};
-
-	wgpuBufferMapAsync(buffer2, wgpu::MapMode::Read, 0, 16, onBuffer2Mapped, (void*)&context);
-	//					 	  Pass the address of the Context instance here: ^^^^^^^^^^^^^^^
-
-	while(!context.ready){
-		// ^^^^^^^^^^^^^ Use context.ready here instead of ready
-		wgpuPollEvents(device, true /* yieldToBrowser */);
-	}
-
-	//In Terminate()
-	buffer1.release();
-	buffer2.release();
+	//Upload geometry data to the buffer
+	queue.writeBuffer(vertexBuffer,0,vertexData.data(),bufferDesc.size);
 }

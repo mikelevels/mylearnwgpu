@@ -129,7 +129,8 @@ Dawn and rebuilding it as you usually do one more time!
 
 Step032_cpp
 
-
+Okay, so there was a few issues that occurred during initialization of the 
+Application object. 
     
-
+![alt text](image.png)
 
