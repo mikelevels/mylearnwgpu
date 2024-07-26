@@ -134,3 +134,9 @@ Application object.
     
 ![alt text](image.png)
 
+Step033_cpp
+
+Notably, the program up to this point is running. Several issues were resolved by the tutorial writer to resolve the bugs caused in the build system backend. This time it wasnt you!
+
+Moving forward the new updates to this code will be moved into BRANCHES instead of commits. This more closely follows how the tutorial works.
+

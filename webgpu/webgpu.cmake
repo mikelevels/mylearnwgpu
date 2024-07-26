@@ -1,4 +1,3 @@
-
 include(FetchContent)
 
 set(WEBGPU_BACKEND "WGPU" CACHE STRING "Backend implementation of WebGPU. Possible values are EMSCRIPTEN, WGPU, WGPU_STATIC and DAWN (it does not matter when using emcmake)")
@@ -6,29 +5,33 @@ set_property(CACHE WEBGPU_BACKEND PROPERTY STRINGS EMSCRIPTEN WGPU WGPU_STATIC D
 
 # FetchContent's GIT_SHALLOW option is buggy and does not actually do a shallow
 # clone. This macro takes care of it.
-
 macro(FetchContent_DeclareShallowGit Name GIT_REPOSITORY GitRepository GIT_TAG GitTag)
-    FetchContent_Declare(
-            "${Name}"
+	FetchContent_Declare(
+		"${Name}"
 
-            # Manual download mode instead:
-            DOWNLOAD_COMMAND
-                    cd "${FETCHCONTENT_BASE_DIR}/${Name}-src" &&
-                    git init &&
-                    git fetch --depth=1 "${GitRepository}" "${GitTag}" &&
-                    git reset --hard FETCH_HEAD
-    )
+		# This is what it'd look line if GIT_SHALLOW was indeed working:
+		#GIT_REPOSITORY "${GitRepository}"
+		#GIT_TAG        "${GitTag}"
+		#GIT_SHALLOW    ON
+
+		# Manual download mode instead:
+		DOWNLOAD_COMMAND
+			cd "${FETCHCONTENT_BASE_DIR}/${Name}-src" &&
+			git init &&
+			git fetch --depth=1 "${GitRepository}" "${GitTag}" &&
+			git reset --hard FETCH_HEAD
+	)
 endmacro()
 
-if(NOT TARGET webgpu)
-    string(TOUPPER ${WEBGPU_BACKEND} WEBGPU_BACKEND_U)
+if (NOT TARGET webgpu)
+	string(TOUPPER ${WEBGPU_BACKEND} WEBGPU_BACKEND_U)
 
 	if (EMSCRIPTEN OR WEBGPU_BACKEND_U STREQUAL "EMSCRIPTEN")
 
 		FetchContent_DeclareShallowGit(
 			webgpu-backend-emscripten
 			GIT_REPOSITORY https://github.com/eliemichel/WebGPU-distribution
-			GIT_TAG        e0038567ca1e35ffa9a848760eb6c49450264305 # emscripten-v3.1.61 + fix
+			GIT_TAG        fa0b54d68841fb33188403b07959d403b24511de # emscripten-v3.1.61 + fix
 		)
 		FetchContent_MakeAvailable(webgpu-backend-emscripten)
 
@@ -37,7 +40,7 @@ if(NOT TARGET webgpu)
 		FetchContent_DeclareShallowGit(
 			webgpu-backend-wgpu
 			GIT_REPOSITORY https://github.com/eliemichel/WebGPU-distribution
-			GIT_TAG        ac055bef9d8c37f28e7706e4bd32153cbc0c210f # wgpu-v0.19.4.1 + fix
+			GIT_TAG        54a60379a9d792848a2311856375ceef16db150e # wgpu-v0.19.4.1 + fix
 		)
 		FetchContent_MakeAvailable(webgpu-backend-wgpu)
 
@@ -46,7 +49,7 @@ if(NOT TARGET webgpu)
 		FetchContent_DeclareShallowGit(
 			webgpu-backend-wgpu-static
 			GIT_REPOSITORY https://github.com/eliemichel/WebGPU-distribution
-			GIT_TAG        3612311d4df171027513a3ad5dcd8a77d93c447f # wgpu-static-v0.19.4.1 + fix
+			GIT_TAG        992fef64da25072ebe3844a73f7103105e7fd133 # wgpu-static-v0.19.4.1 + fix
 		)
 		FetchContent_MakeAvailable(webgpu-backend-wgpu-static)
 
