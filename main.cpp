@@ -43,7 +43,8 @@ struct VertexOutput{
 fn vs_main(in: VertexInput) -> VertexOutput{
 //							   ^^^^^^^^^^^^ return the custome struct
 	var out: VertexOutput;// create the output struct
-	out.position = vec4f(in.position,0.0,1.0);//Same as what we used to directly return
+	let ratio = 640.0/480.0; // The width and height of the target surface
+	out.position = vec4f(in.position.x, in.position.y * ratio,0.0,1.0);//Same as what we used to directly return
 	out.color = in.color;//forward the color attribute to the fragment shader
 	return out;
 }
@@ -87,8 +88,9 @@ class Application{
 		std::unique_ptr<wgpu::ErrorCallback> uncapturedErrorCallbackHandle;
 		wgpu::TextureFormat surfaceFormat = wgpu::TextureFormat::Undefined;
 		wgpu::RenderPipeline pipeline;
-		wgpu::Buffer vertexBuffer;
-		uint32_t vertexCount;
+		wgpu::Buffer pointBuffer;
+		wgpu::Buffer indexBuffer;
+		uint32_t indexCount;
 };
 
 int main(int, char**){
@@ -188,7 +190,8 @@ bool Application::Initialize(){
 }
 
 void Application::Terminate(){
-	vertexBuffer.release();
+	pointBuffer.release();
+	indexBuffer.release();
 	pipeline.release();
 	surface.unconfigure();
 	queue.release();
@@ -234,11 +237,16 @@ void Application::MainLoop(){
 	//Select which render pipeline to use
 	renderPass.setPipeline(pipeline);
 
-	//Set vertex buffer while encoding the render pass
-	renderPass.setVertexBuffer(0, vertexBuffer, 0, vertexBuffer.getSize());
+	//Set POINT buffer while encoding the render pass
+	renderPass.setVertexBuffer(0, pointBuffer, 0, pointBuffer.getSize());
 
-	//We use the `vertexCount` variable instead of hard-coding the vertex count
-	renderPass.draw(vertexCount, 1, 0,0);
+	//The second argument must correspond to the choice of uint16_t or uint32_t
+	//we are done with creating the index buffer
+	renderPass.setIndexBuffer(indexBuffer, wgpu::IndexFormat::Uint16, 0, indexBuffer.getSize());
+
+	//Replace 'draw()' with 'drawIndexed()' and 'vertexCount' with 'indexCount'
+	//The extra argument is an offset within the index buffer.
+	renderPass.drawIndexed(indexCount, 1, 0, 0, 0);
 
 	renderPass.end();
 	renderPass.release();
@@ -269,7 +277,7 @@ void Application::MainLoop(){
 
 bool Application::IsRunning(){
     return !glfwWindowShouldClose(window);
-}
+};
 
 wgpu::TextureView Application::GetNextSurfaceTextureView(){
     // Get the surface texture
@@ -446,30 +454,39 @@ wgpu::RequiredLimits Application::GetRequiredLimits(wgpu::Adapter adapter) const
 void Application::InitializeBuffers(){
 	//Vertex buffer data
 	//There are 2 floats per vertex, one for x and one for y.
-	std::vector<float> vertexData = {
-		// x0, y0, r0, g0, b0
-		-0.5, -0.5, 1.0, 0.0, 0.0,
-		// x1, y1, r1, g1, b1
-		+0.5, -0.5, 0.0, 1.0, 0.0,
-		//(...)
-		+0.0, +0.5, 0.0, 0.0, 1.0,
-
-		//Add a second triangle:
-		-0.55f, -0.5, 1.0, 1.0, 0.0,
-		-0.05f, +0.5, 1.0, 0.0, 1.0,
-		-0.55f, +0.5, 0.0, 1.0, 1.0
+	std::vector<float> pointData= {
+		// x,   y,     r,   g,   b
+		-0.5, -0.5,   1.0, 0.0, 0.0, // Point #0
+		+0.5, -0.5,   0.0, 1.0, 0.0, // Point #1
+		+0.5, +0.5,   0.0, 0.0, 1.0, // Point #2
+		-0.5, +0.5,   1.0, 1.0, 0.0  // Point #3
 	};
 
-	// Divide the vector size by 5 fields:
-	vertexCount = static_cast<uint32_t>(vertexData.size()/5);
+	//Define index data
+	// This is a list of indices referencing positions in the pointData
+	std::vector<uint16_t> indexData = {
+	    0, 1, 2, // Triangle #0 connects points #0, #1 and #2
+	    0, 2, 3  // Triangle #1 connects points #0, #2 and #3
+	};
 
-	//Create a vertex buffer
+	indexCount = static_cast<uint32_t>(indexData.size());
+
+	//Create a POINT buffer
 	wgpu::BufferDescriptor bufferDesc;
-	bufferDesc.size = vertexData.size()*sizeof(float);
+	bufferDesc.size = pointData.size()*sizeof(float);
 	bufferDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Vertex;// Vertex usage here!
 	bufferDesc.mappedAtCreation = false;
-	vertexBuffer = device.createBuffer(bufferDesc);
+	pointBuffer = device.createBuffer(bufferDesc);
 
 	//Upload geometry data to the buffer
-	queue.writeBuffer(vertexBuffer,0,vertexData.data(),bufferDesc.size);
+	queue.writeBuffer(pointBuffer,0,pointData.data(),bufferDesc.size);
+
+	//Create index buffer
+	//(we reuse the bufferDesc initialized for the pointBuffer)
+	bufferDesc.size = indexData.size()*sizeof(uint16_t);
+	bufferDesc.size = (bufferDesc.size + 3) & ~3;//round up to the nearest multiple of 4
+	bufferDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Index;
+	indexBuffer = device.createBuffer(bufferDesc);
+
+	queue.writeBuffer(indexBuffer, 0 , indexData.data(), bufferDesc.size);
 }

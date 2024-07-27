@@ -30,6 +30,7 @@ set_target_properties(App PROPERTIES
 	COMPILE_WARNING_AS_ERROR ON
 )
 
+# I think this is where the set all warnings as errors happens... Did this fix the issue?
 if (MSVC)
 	target_compile_options(App PRIVATE /W4)
 else()
