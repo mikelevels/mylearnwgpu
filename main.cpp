@@ -14,47 +14,7 @@
 #include <cassert>
 #include <vector>
 
-// We embed the source of the shader module here
-const char* shaderSource = R"(
-/**
- * A structure with fields labeled with vertex attribute locations can be used
- * as input to the entry point of a shader.
-*/
-struct VertexInput{
-	@location(0) position: vec2f,
-	@location(1) color: vec3f,
-};
-
-/**
- * A structure with fields labeled with builtins and locations can also be used
- * as *output* of the vertex shader, which iis also the input of the fragment
- * shader.
-*/
-struct VertexOutput{
-	@builtin(position) position: vec4f,
-	// The location here does not refer to a vertex attribute, it just means
-	// that this field must be handled by the rasterizer.
-	// (It can also refer to another field of another struct that would be used
-	// as input to the fragment shader.)
-	@location(0) color: vec3f,
-};
-
-@vertex
-fn vs_main(in: VertexInput) -> VertexOutput{
-//							   ^^^^^^^^^^^^ return the custome struct
-	var out: VertexOutput;// create the output struct
-	let ratio = 640.0/480.0; // The width and height of the target surface
-	out.position = vec4f(in.position.x, in.position.y * ratio,0.0,1.0);//Same as what we used to directly return
-	out.color = in.color;//forward the color attribute to the fragment shader
-	return out;
-}
-
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4f{
-//			   ^^^^^^^^^^^^ Use for instance the same struct as what the vertex outputs
-	return vec4f(in.color, 1.0);//use the interpolated color coming from the vertex shader
-}
-)";
+#include "ResourceManager.h"
 
 /**
  * Main application class, that holds the whole app state and regroups
@@ -150,6 +110,8 @@ bool Application::Initialize(){
 	//Before adapter.requestDevice(deviceDesc)
 	wgpu::RequiredLimits requiredLimits = GetRequiredLimits(adapter);
 	deviceDesc.requiredLimits = &requiredLimits;
+	std::cout << "Got the required limits:" << std::endl;
+	std::cout << "maxInterStageShaderComponents: " << deviceDesc.requiredLimits->limits.maxInterStageShaderComponents << std::endl;
 	device = adapter.requestDevice(deviceDesc);
 	std::cout << "Got device: " << device << std::endl;
 	
@@ -304,23 +266,15 @@ wgpu::TextureView Application::GetNextSurfaceTextureView(){
 }
 
 void Application::InitializePipeline(){
-	//Load the shader module
-	wgpu::ShaderModuleDescriptor shaderDesc;
-#ifdef WEBGPU_BACKEND_WGPU
-	shaderDesc.hintCount = 0;
-	shaderDesc.hints = nullptr;
-#endif
+	std::cout << "Creating shader module..." << std::endl;
+	wgpu::ShaderModule shaderModule = ResourceManager::loadShaderModule(RESOURCE_DIR "/shader.wgsl", device);
+	std::cout << "Shader module: " << shaderModule << std::endl;
 
-	// We use the extension mechanism to specify the WGSL part of the shader module descriptor
-	wgpu::ShaderModuleWGSLDescriptor shaderCodeDesc;
-	//Set the chained struct's header
-	shaderCodeDesc.chain.next = nullptr;
-	shaderCodeDesc.chain.sType = wgpu::SType::ShaderModuleWGSLDescriptor;
-	//Connect the chain
-	shaderDesc.nextInChain = &shaderCodeDesc.chain;
-	shaderCodeDesc.code = shaderSource;
-	wgpu::ShaderModule shaderModule = device.createShaderModule(shaderDesc);
-
+	// Check for errors
+	if (shaderModule == nullptr) {
+		std::cerr << "Could not load shader!" << std::endl;
+		exit(1);
+	}
 	//Create the render pipeline
 	wgpu::RenderPipelineDescriptor pipelineDesc;
 
@@ -433,8 +387,8 @@ wgpu::RequiredLimits Application::GetRequiredLimits(wgpu::Adapter adapter) const
 	//We should also tell that we use 1 vertex buffers
 	requiredLimits.limits.maxVertexBuffers = 1;
 	//Maximum size of a buffer is 6 vertices of 2 float each
-	requiredLimits.limits.maxBufferSize = 6*5*sizeof(float);
-	//										^ This value was a 2
+	requiredLimits.limits.maxBufferSize = 15*5*sizeof(float);
+	//										^ This value was a 6
 	//Maximum stride between 2 consecutive vertices in the vertex buffer
 	requiredLimits.limits.maxVertexBufferArrayStride = 5*sizeof(float);
 	//												   ^ This was a 2
@@ -448,26 +402,25 @@ wgpu::RequiredLimits Application::GetRequiredLimits(wgpu::Adapter adapter) const
 	requiredLimits.limits.minUniformBufferOffsetAlignment = supportedLimits.limits.minUniformBufferOffsetAlignment;
 	requiredLimits.limits.minStorageBufferOffsetAlignment = supportedLimits.limits.minStorageBufferOffsetAlignment;
 
-	return(requiredLimits);
+	return requiredLimits;
 }
 
 void Application::InitializeBuffers(){
 	//Vertex buffer data
 	//There are 2 floats per vertex, one for x and one for y.
-	std::vector<float> pointData= {
-		// x,   y,     r,   g,   b
-		-0.5, -0.5,   1.0, 0.0, 0.0, // Point #0
-		+0.5, -0.5,   0.0, 1.0, 0.0, // Point #1
-		+0.5, +0.5,   0.0, 0.0, 1.0, // Point #2
-		-0.5, +0.5,   1.0, 1.0, 0.0  // Point #3
-	};
-
+	std::vector<float> pointData;
 	//Define index data
 	// This is a list of indices referencing positions in the pointData
-	std::vector<uint16_t> indexData = {
-	    0, 1, 2, // Triangle #0 connects points #0, #1 and #2
-	    0, 2, 3  // Triangle #1 connects points #0, #2 and #3
-	};
+	std::vector<uint16_t> indexData;
+
+	// Here we use the new 'loadGeometry' function:
+	bool success = ResourceManager::loadGeometry(RESOURCE_DIR "/webgpu.txt", pointData, indexData);
+
+	// Check for errors
+	if (!success) {
+		std::cerr << "Could not load geometry!" << std::endl;
+		exit(1);
+	}
 
 	indexCount = static_cast<uint32_t>(indexData.size());
 

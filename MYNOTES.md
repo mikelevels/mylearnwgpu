@@ -116,7 +116,7 @@ with name resolution? There is a problem with name resolution in VSCode
 intellisense, but it couldnt find a common wrapper end point in a namespace?
 
 The issue is resolved. You are not certain if it happened due to you manually 
-cleaning up it right now. The following ran without an issue:
+cleaning it up right now. The following ran without an issue:
     wgpu
     Dawn
     emscripten
@@ -129,7 +129,7 @@ Dawn and rebuilding it as you usually do one more time!
 
 Step032_cpp
 
-Okay, so there was a few issues that occurred during initialization of the 
+Okay, so there were a few issues that occurred during initialization of the 
 Application object. 
     
 ![alt text](image.png)
@@ -143,4 +143,8 @@ Moving forward the new updates to this code will be moved into BRANCHES instead 
 Step034_cpp
 
 All necessary builds are operational at this point!
+
+Step037_cpp
+
+HERE
 
