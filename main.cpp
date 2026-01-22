@@ -224,6 +224,8 @@ void Application::MainLoop(){
 	command.release();
 	std::cout << "Command submitted." << std::endl;
 
+	std::cout << "Surface format: "<< surfaceFormat << std::endl;
+
 	// At the end of the frame
 	targetView.release();
 #ifndef __EMSCRIPTEN__
