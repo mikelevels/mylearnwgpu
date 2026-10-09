@@ -7,7 +7,8 @@
 bool ResourceManager::loadGeometry(
     const std::filesystem::path& path,
     std::vector<float>& pointData,
-    std::vector<uint16_t>& indexData) {
+    std::vector<uint16_t>& indexData,
+    int dimensions) {
     std::ifstream file(path);
 
     if (!file.is_open()) {
@@ -39,22 +40,29 @@ bool ResourceManager::loadGeometry(
             line.pop_back();
         }
 
+        // Position of the first character that is not a space or a tab.
+        // npos means the line is blank (empty, or only spaces/tabs).
+        // Step050: the guide's pyramid.txt ends with a line containing a
+        // single space. The old check (line.empty()) did not see it as blank,
+        // so the guide's parser silently added a fake triangle (4, 4, 4) and
+        // our stricter parser refused the whole file.
+        size_t firstChar = line.find_first_not_of(" \t");
+
         if (line == "[points]") {
             currentSection = Section::Points;
         }
         else if (line == "[indices]") {
             currentSection = Section::Indices;
         }
-        else if (line.empty() || line[0] == '#') {
-            //DO NOTHING THE LINE IS EMPTY OR A COMMENT
-            //(check empty() first, so we never look at line[0] of an empty line)
+        else if (firstChar == std::string::npos || line[firstChar] == '#') {
+            //DO NOTHING THE LINE IS BLANK OR A COMMENT
         }
         else if (currentSection == Section::Points) {
             std::istringstream iss(line);
-            //Get x,y,r,g,b
-            for (int i = 0; i < 5; ++i) {
+            //Get x,y(,z),r,g,b: `dimensions` coordinates then 3 color values
+            for (int i = 0; i < dimensions + 3; ++i) {
                 // `iss >> value` evaluates to false if the next word is not a
-                // number or if the line has fewer than 5 values. Before, we
+                // number or if the line has too few values. Before, we
                 // pushed whatever was left in `value` and silently loaded a
                 // broken mesh. Now we report the file as invalid instead.
                 if (!(iss >> value)) {

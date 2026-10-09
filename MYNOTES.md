@@ -197,5 +197,20 @@ requiredFeaturesCount and timestampWriteCount which do not exist in our version.
 
 CONFIRMED All three builds run (wgpu, Dawn, emscripten). Uniform stride is 256 bytes on all three.
 
+Step050_cpp
+
+A simple example. First 3D mesh: resources/pyramid.txt (x y z r g b), loadGeometry got a `dimensions`
+argument, the position attribute is Float32x3 and the stride is 6 floats. The vertex shader rotates the
+pyramid around X by hand (cos/sin of the time). Dynamic uniforms from Step044 are rolled back like in
+the guide (still in commit f446f3e). See MyNotes/aSimpleExample.md.
+
+IMPORTANT: The guide's pyramid.txt ends with a line containing ONE SPACE. Our strict loader said
+"Could not load geometry!" on all three builds. The guide's loader silently adds a fake (4, 4, 4)
+triangle instead. Blank lines are now detected with find_first_not_of(" \t").
+
+NOTE: The faces overlap in the WRONG order. Expected: no depth buffer yet (next chapter).
+
+CONFIRMED All three builds run (wgpu, Dawn, emscripten).
+
 HERE
 

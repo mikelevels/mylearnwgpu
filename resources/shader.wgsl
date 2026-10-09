@@ -24,7 +24,8 @@ struct MyUniforms {
  * as input to the entry point of a shader.
  */
 struct VertexInput {
-	@location(0) position: vec2f,
+	@location(0) position: vec3f,
+	//                        ^ This was a 2 (Step050: x, y AND z)
 	@location(1) color: vec3f,
 };
 
@@ -47,12 +48,31 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 	//                         ^^^^^^^^^^^^ We return a custom struct
 	var out: VertexOutput; // create the output struct
 	let ratio = 640.0 / 480.0; // The width and height of the target surface
-	// The offset that we want to apply to the position. It is now a `var`
-	// (not `let`) because we modify it: the logo moves in a circle of radius
-	// 0.3 as time goes on.
-	var offset = vec2f(-0.6875, -0.463);
-	offset += 0.3 * vec2f(cos(uMyUniforms.time), sin(uMyUniforms.time));
-	out.position = vec4f(in.position.x + offset.x, (in.position.y + offset.y) * ratio, 0.0, 1.0);
+
+	// Step050: the pyramid is centered on the origin, so no more offset.
+	// Instead it ROTATES around the X axis. The angle is the time in seconds,
+	// read as radians: one full turn every 2*pi = ~6.3 seconds.
+	let angle = uMyUniforms.time; // you can multiply it to rotate faster
+
+	// Rotating around X keeps x as is and "mixes" y and z:
+	//   y' = cos(angle) * y + sin(angle) * z
+	//   z' = cos(angle) * z - sin(angle) * y
+	// Sanity check: at angle = 0, alpha = 1 and beta = 0, so nothing moves.
+	// (The minus sign is there because swapping two axes would mirror the
+	// object; after a quarter turn z' must be -y, not +y.)
+	let alpha = cos(angle);
+	let beta = sin(angle);
+	var position = vec3f(
+		in.position.x,
+		alpha * in.position.y + beta * in.position.z,
+		alpha * in.position.z - beta * in.position.y,
+	);
+
+	// We still throw z away (0.0) when writing the output position: there is
+	// no depth buffer and no perspective yet. This is why the triangles are
+	// not drawn in the right order: whichever is drawn LAST ends up on top,
+	// even when it is behind. The next chapter (Depth buffer) fixes that.
+	out.position = vec4f(position.x, position.y * ratio, 0.0, 1.0);
 	out.color = in.color; // forward the color attribute to the fragment shader
 	return out;
 }
@@ -68,7 +88,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 	// colors channel by channel acts like looking through a colored filter.
 	let color = in.color * uMyUniforms.color.rgb;
 	let linear_color = pow(color, vec3f(uMyUniforms.gamma));
-	// Step044: the alpha now comes from the uniform color, so the second logo
-	// (alpha 0.7) is see-through thanks to the pipeline's blend state.
+	// Step044: the alpha comes from the uniform color, so a color with an
+	// alpha below 1.0 is see-through thanks to the pipeline's blend state.
 	return vec4f(linear_color, uMyUniforms.color.a); // use the interpolated color coming from the vertex shader
 }

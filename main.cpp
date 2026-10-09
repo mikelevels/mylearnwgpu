@@ -15,7 +15,6 @@
 #include <cstddef>// for offsetof
 #include <cmath>// for std::pow
 #include <array>// for std::array (Step043)
-#include <algorithm>// for std::max (Step044)
 #include <vector>
 
 #include "ResourceManager.h"
@@ -72,22 +71,10 @@ class Application{
 		// 2.2 if the surface does sRGB conversion, 1.0 otherwise (set in
 		// InitializeBuffers). Used for the shader AND for the clear color.
 		float gamma = 1.0f;
-
-		// Distance in bytes between two uniform blocks in uniformBuffer
-		// (Step044). sizeof(MyUniforms) rounded UP to the device's
-		// minUniformBufferOffsetAlignment, because every dynamic offset must
-		// be a multiple of that alignment (often 256 bytes).
-		uint32_t uniformStride = 0;
+		// Step050: the dynamic uniforms of Step044 (two logos from one buffer)
+		// are rolled back, like in the guide, to keep the 3D code simple.
+		// That version is still in git history: commit f446f3e.
 };
-
-/**
- * Round `value` up to the next multiple of `step` (Step044).
- * Example: ceilToNextMultiple(32, 256) == 256, ceilToNextMultiple(300, 256) == 512.
- */
-uint32_t ceilToNextMultiple(uint32_t value, uint32_t step) {
-	uint32_t divide_and_ceil = value / step + (value % step == 0 ? 0 : 1);
-	return step * divide_and_ceil;
-}
 
 /**
  * The C++ mirror of the `MyUniforms` struct declared in shader.wgsl.
@@ -270,12 +257,11 @@ void Application::MainLoop(){
 	if (!targetView) return;
 
 	// Update the uniform buffer with the current time.
-	// We only overwrite the `time` field of the FIRST uniform block (the one at
-	// offset 0): `offsetof` gives where it sits inside MyUniforms, so the other
-	// fields keep the value set at startup. The second block (at uniformStride)
-	// keeps time = -1 forever, so the second logo stays still (Step044).
+	// We only overwrite the `time` field: `offsetof` gives where it sits inside
+	// MyUniforms, so the other fields keep the value set at startup.
+	// Step050: the shader now uses the time as a rotation ANGLE in radians.
 	float t = static_cast<float>(glfwGetTime());
-	queue.writeBuffer(uniformBuffer, 0 * uniformStride + offsetof(MyUniforms, time), &t, sizeof(float));
+	queue.writeBuffer(uniformBuffer, offsetof(MyUniforms, time), &t, sizeof(float));
 
 	// Create a command encoder for the draw call
 	wgpu::CommandEncoderDescriptor encoderDesc = {};
@@ -318,29 +304,12 @@ void Application::MainLoop(){
 	//we are done with creating the index buffer
 	renderPass.setIndexBuffer(indexBuffer, wgpu::IndexFormat::Uint16, 0, indexBuffer.getSize());
 
-	// Draw the logo TWICE with different uniforms (Step044, dynamic uniforms).
-	//
-	// Why not just writeBuffer() new values between the two draws? Because
-	// nothing is drawn yet: we are only RECORDING commands into the encoder.
-	// All writeBuffer calls happen when we submit, before ANY recorded draw
-	// runs, so both draws would see the last value written.
-	//
-	// Instead, both uniform blocks live in the same buffer, uniformStride bytes
-	// apart, and each draw tells the bind group where to start reading with a
-	// "dynamic offset" (the last two arguments of setBindGroup).
-	uint32_t dynamicOffset = 0;
+	//Plug our bind group into slot @group(0) of the shader, so that uMyUniforms
+	//reads from uniformBuffer. (Back to no dynamic offsets: 0, nullptr.)
+	renderPass.setBindGroup(0, bindGroup, 0, nullptr);
 
-	// First logo: reads the uniform block at offset 0 (animated, green tint)
-	dynamicOffset = 0 * uniformStride;
-	renderPass.setBindGroup(0, bindGroup, 1, &dynamicOffset);
 	//Replace 'draw()' with 'drawIndexed()' and 'vertexCount' with 'indexCount'
 	//The extra argument is an offset within the index buffer.
-	renderPass.drawIndexed(indexCount, 1, 0, 0, 0);
-
-	// Second logo: reads the uniform block at offset uniformStride
-	// (still, white tint at 70% opacity)
-	dynamicOffset = 1 * uniformStride;
-	renderPass.setBindGroup(0, bindGroup, 1, &dynamicOffset);
 	renderPass.drawIndexed(indexCount, 1, 0, 0, 0);
 
 	renderPass.end();
@@ -418,19 +387,21 @@ void Application::InitializePipeline(){
 
 	//Describe the position attribute
 	vertexAttribs[0].shaderLocation = 0;//@location(0)
-	vertexAttribs[0].format = wgpu::VertexFormat::Float32x2;
+	vertexAttribs[0].format = wgpu::VertexFormat::Float32x3;
+	//												  ^ This was a 2 (Step050: x, y AND z)
 	vertexAttribs[0].offset=0;
 
 	//Describe the color attribute
 	vertexAttribs[1].shaderLocation = 1;//@location(1)
 	vertexAttribs[1].format = wgpu::VertexFormat::Float32x3;//different type!
-	vertexAttribs[1].offset = 2*sizeof(float);//non null offset!
+	vertexAttribs[1].offset = 3*sizeof(float);//non null offset!
+	//						  ^ This was a 2: the color now starts after x, y, z
 
 	vertexBufferLayout.attributeCount = static_cast<uint32_t>(vertexAttribs.size());
 	vertexBufferLayout.attributes = vertexAttribs.data();
 
-	vertexBufferLayout.arrayStride = 5*sizeof(float);
-	//								^^^^^^^^^^^^^^^^ new stride
+	vertexBufferLayout.arrayStride = 6*sizeof(float);
+	//								^ This was a 5: x y z r g b
 	vertexBufferLayout.stepMode = wgpu::VertexStepMode::Vertex;
 
 	pipelineDesc.vertex.bufferCount = 1;
@@ -512,9 +483,6 @@ void Application::InitializePipeline(){
 	bindingLayout.visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
 	bindingLayout.buffer.type = wgpu::BufferBindingType::Uniform;
 	bindingLayout.buffer.minBindingSize = sizeof(MyUniforms);
-	// Step044: this binding gets its start offset at draw time, from the
-	// dynamic offset passed to setBindGroup(), instead of a fixed offset.
-	bindingLayout.buffer.hasDynamicOffset = true;
 
 	// A bind group layout is a list of binding layouts (we have only one)
 	wgpu::BindGroupLayoutDescriptor bindGroupLayoutDesc{};
@@ -550,21 +518,15 @@ wgpu::RequiredLimits Application::GetRequiredLimits(wgpu::Adapter adapter) const
 	//We should also tell that we use 1 vertex buffers
 	requiredLimits.limits.maxVertexBuffers = 1;
 	//Maximum size of a buffer: the biggest of our buffers.
-	// - the point buffer: 15 points of 5 floats each
-	// - the uniform buffer (Step044): two MyUniforms blocks, the second one
-	//   starting at sizeof(MyUniforms) rounded up to the offset alignment.
-	// The guide keeps 15*5*sizeof(float) = 300 bytes here, which only works
-	// by luck when the alignment is 256 (256 + 32 = 288 <= 300). Computing
-	// it keeps us safe on any GPU.
-	uint64_t pointBufferSize = 15*5*sizeof(float);
-	uint64_t uniformBufferSize = ceilToNextMultiple(
-		static_cast<uint32_t>(sizeof(MyUniforms)),
-		supportedLimits.limits.minUniformBufferOffsetAlignment
-	) + sizeof(MyUniforms);
-	requiredLimits.limits.maxBufferSize = std::max(pointBufferSize, uniformBufferSize);
+	// - the point buffer: 5 points of 6 floats each (pyramid.txt) = 120 bytes
+	// - the index buffer: 18 indices of 2 bytes = 36 bytes
+	// - the uniform buffer: one MyUniforms = 32 bytes
+	// The guide keeps 15*5*sizeof(float) = 300 bytes from the logo, which is
+	// more than enough. We keep it too, as headroom.
+	requiredLimits.limits.maxBufferSize = 15*5*sizeof(float);
 	//Maximum stride between 2 consecutive vertices in the vertex buffer
-	requiredLimits.limits.maxVertexBufferArrayStride = 5*sizeof(float);
-	//												   ^ This was a 2
+	requiredLimits.limits.maxVertexBufferArrayStride = 6*sizeof(float);
+	//												   ^ This was a 5 (Step050: x y z r g b)
 
 	// There is a maximum of 3 float forwarded from vertex to fragment shader
 	// Chrome has since removed this limit from the WebGPU standard and now
@@ -581,8 +543,6 @@ wgpu::RequiredLimits Application::GetRequiredLimits(wgpu::Adapter adapter) const
 	requiredLimits.limits.maxUniformBuffersPerShaderStage = 1;
 	// Uniform structs have a size of maximum 16 float (more than what we need)
 	requiredLimits.limits.maxUniformBufferBindingSize = 16*4;
-	// Step044: our one uniform binding uses a dynamic offset
-	requiredLimits.limits.maxDynamicUniformBuffersPerPipelineLayout = 1;
 
 	// These two limits are different because they are "minimum" limits,
 	// they are the only ones we may forward from the adapter's supported
@@ -595,14 +555,15 @@ wgpu::RequiredLimits Application::GetRequiredLimits(wgpu::Adapter adapter) const
 
 void Application::InitializeBuffers(){
 	//Vertex buffer data
-	//There are 2 floats per vertex, one for x and one for y.
+	//Step050: there are now 6 floats per vertex: x, y, z then r, g, b.
 	std::vector<float> pointData;
 	//Define index data
 	// This is a list of indices referencing positions in the pointData
 	std::vector<uint16_t> indexData;
 
-	// Here we use the new 'loadGeometry' function:
-	bool success = ResourceManager::loadGeometry(RESOURCE_DIR "/webgpu.txt", pointData, indexData);
+	// Step050: load the 3D pyramid instead of the 2D logo. The last argument
+	// tells loadGeometry how many position coordinates each line has.
+	bool success = ResourceManager::loadGeometry(RESOURCE_DIR "/pyramid.txt", pointData, indexData, 3 /* dimensions */);
 
 	// Check for errors
 	if (!success) {
@@ -613,7 +574,8 @@ void Application::InitializeBuffers(){
 	indexCount = static_cast<uint32_t>(indexData.size());
 
 	// writeBuffer only accepts sizes that are a multiple of 4 bytes, but each
-	// index is 2 bytes. With an odd number of indices (15 in webgpu.txt) we
+	// index is 2 bytes. With an odd number of indices (15 in webgpu.txt, the
+	// pyramid has 18 so it does not need it, but the next model might) we
 	// would copy 2 bytes past the end of indexData, i.e. read memory that does
 	// not belong to us. Adding a dummy 0 index makes the vector itself long
 	// enough. It is never drawn, because drawIndexed uses indexCount (saved
@@ -641,19 +603,9 @@ void Application::InitializeBuffers(){
 	queue.writeBuffer(indexBuffer, 0 , indexData.data(), bufferDesc.size);
 
 	//Create uniform buffer (reusing bufferDesc from the other buffers)
-	//Step044: it now holds TWO MyUniforms blocks, one per logo:
-	//    offset 0:             block 0 (32 bytes) + unused padding
-	//    offset uniformStride: block 1 (32 bytes)
-	//The device's limits tell us the alignment that dynamic offsets must
-	//respect. We asked for the adapter's best value in GetRequiredLimits().
-	wgpu::SupportedLimits deviceSupportedLimits;
-	device.getLimits(&deviceSupportedLimits);
-	uniformStride = ceilToNextMultiple(
-		static_cast<uint32_t>(sizeof(MyUniforms)),
-		deviceSupportedLimits.limits.minUniformBufferOffsetAlignment
-	);
-	std::cout << "Uniform stride: " << uniformStride << " bytes" << std::endl;
-	bufferDesc.size = uniformStride + sizeof(MyUniforms);
+	//It holds exactly one MyUniforms struct again (Step050 rolls back the
+	//two blocks of Step044).
+	bufferDesc.size = sizeof(MyUniforms);
 	//Make sure to flag the buffer as BufferUsage::Uniform
 	bufferDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Uniform;
 	bufferDesc.mappedAtCreation = false;
@@ -663,9 +615,9 @@ void Application::InitializeBuffers(){
 	MyUniforms uniforms = {};
 	uniforms.time = 0.0f;
 	// A green tint, as in the guide (RGBA, each between 0 and 1). The shader
-	// multiplies every vertex color by it, so blue logo * green tint = teal.
+	// multiplies every vertex color by it, so the white pyramid base looks green.
 	uniforms.color = { 0.0f, 1.0f, 0.4f, 1.0f };
-	// Gamma correction. Our colors in webgpu.txt are written in sRGB (the
+	// Gamma correction. Our colors in the .txt files are written in sRGB (the
 	// space color pickers use). If the surface is an *sRGB* format, the GPU
 	// converts linear -> sRGB when writing pixels, so we must first convert
 	// our sRGB colors to linear (pow 2.2) or they come out washed out.
@@ -678,16 +630,7 @@ void Application::InitializeBuffers(){
 	gamma = isSrgb ? 2.2f : 1.0f;
 	uniforms.gamma = gamma;
 	std::cout << "Surface format: " << surfaceFormat << " (sRGB: " << (isSrgb ? "yes" : "no") << ")" << std::endl;
-	// Block 0: the animated green logo
 	queue.writeBuffer(uniformBuffer, 0, &uniforms, sizeof(MyUniforms));
-
-	// Block 1: a second logo, frozen at time -1, white at 70% opacity.
-	// The alpha (0.7) is used by the blend state set up in InitializePipeline
-	// (SrcAlpha / OneMinusSrcAlpha), so we see the first logo through it.
-	// Don't forget the non-zero offset in writeBuffer!
-	uniforms.time = -1.0f;
-	uniforms.color = { 1.0f, 1.0f, 1.0f, 0.7f };
-	queue.writeBuffer(uniformBuffer, uniformStride, &uniforms, sizeof(MyUniforms));
 }
 
 void Application::InitializeBindGroups(){
@@ -696,8 +639,8 @@ void Application::InitializeBindGroups(){
 	wgpu::BindGroupEntry binding{};
 	binding.binding = 0;// Must match bindingLayout.binding and @binding(0)
 	binding.buffer = uniformBuffer;
-	binding.offset = 0;// Base offset. The dynamic offset of each draw is ADDED to it...
-	binding.size = sizeof(MyUniforms);// ...and the shader sees one struct from there
+	binding.offset = 0;// We use the buffer from its very beginning...
+	binding.size = sizeof(MyUniforms);// ...up to the size of our struct
 
 	wgpu::BindGroupDescriptor bindGroupDesc{};
 	bindGroupDesc.layout = bindGroupLayout;// The bind group must follow this layout
