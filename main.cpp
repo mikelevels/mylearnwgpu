@@ -14,6 +14,7 @@
 #include <cassert>
 #include <cstddef>// for offsetof
 #include <cmath>// for std::pow
+#include <array>// for std::array (Step043)
 #include <vector>
 
 #include "ResourceManager.h"
@@ -76,16 +77,31 @@ class Application{
  * The C++ mirror of the `MyUniforms` struct declared in shader.wgsl.
  * The two MUST have the same memory layout, field for field, because we copy
  * this struct byte-for-byte into the uniform buffer.
- * WGSL requires a uniform struct's size to be a multiple of 16 bytes, which
- * is why we add padding floats at the end.
+ *
+ * Memory layout rules (Step043, "More uniforms"), from the WGSL spec's
+ * "address space layout constraints":
+ *  1. ALIGNMENT: each field must start at an offset that is a multiple of its
+ *     alignment. A vec4f has an alignment of 16 bytes, an f32 of 4 bytes.
+ *     If `time` came first, `color` would start at offset 4, which is NOT a
+ *     multiple of 16 and would be invalid. So the big field goes first:
+ *        offset  0: color (16 bytes)
+ *        offset 16: time  ( 4 bytes)
+ *        offset 20: gamma ( 4 bytes)
+ *        offset 24: _pad  ( 8 bytes)
+ *  2. SIZE: the whole struct's size must be a multiple of its largest
+ *     alignment (16 here), so we pad from 24 up to 32 bytes.
+ * The WGSL side does not declare the padding: WGSL adds it implicitly.
  */
 struct MyUniforms {
+	std::array<float, 4> color; // RGBA tint applied to every fragment (vec4f in WGSL)
 	float time;      // Seconds since the app started (glfwGetTime())
 	float gamma;     // 2.2 when the surface is sRGB, 1.0 otherwise (see shader)
-	float _pad[2];   // Unused, only here to reach 16 bytes
+	float _pad[2];   // Unused, only here to reach 32 bytes (a multiple of 16)
 };
 // Have the compiler double check that we got the size right
 static_assert(sizeof(MyUniforms) % 16 == 0, "MyUniforms must be a multiple of 16 bytes");
+// ...and that color really sits where WGSL expects it (offset 0, then 16 for time)
+static_assert(offsetof(MyUniforms, time) == 16, "time must start right after the 16-byte color");
 
 int main(int, char**){
     Application app;
@@ -586,6 +602,9 @@ void Application::InitializeBuffers(){
 	//Upload the initial uniform values
 	MyUniforms uniforms = {};
 	uniforms.time = 0.0f;
+	// A green tint, as in the guide (RGBA, each between 0 and 1). The shader
+	// multiplies every vertex color by it, so blue logo * green tint = teal.
+	uniforms.color = { 0.0f, 1.0f, 0.4f, 1.0f };
 	// Gamma correction. Our colors in webgpu.txt are written in sRGB (the
 	// space color pickers use). If the surface is an *sRGB* format, the GPU
 	// converts linear -> sRGB when writing pixels, so we must first convert

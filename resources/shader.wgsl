@@ -5,8 +5,12 @@
  * byte-for-byte into the uniform buffer.
  */
 struct MyUniforms {
-	time: f32,   // Seconds since the app started
-	gamma: f32,  // 2.2 if the surface is sRGB, 1.0 otherwise
+	// Step043: the vec4f goes FIRST because it must start at an offset that
+	// is a multiple of 16 bytes (see the layout table above `struct MyUniforms`
+	// in main.cpp).
+	color: vec4f, // RGBA tint applied to every fragment
+	time: f32,    // Seconds since the app started
+	gamma: f32,   // 2.2 if the surface is sRGB, 1.0 otherwise
 	// (the 2 padding floats of the C++ struct do not need to be declared)
 };
 
@@ -60,6 +64,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 	// The value used to be computed and then thrown away (we returned
 	// in.color). We now return it, with an exponent chosen on the C++ side so
 	// the colors look the same whatever surface format the backend picked.
-	let linear_color = pow(in.color, vec3f(uMyUniforms.gamma));
+	// Step043: tint the vertex color with the uniform color. Multiplying two
+	// colors channel by channel acts like looking through a colored filter.
+	let color = in.color * uMyUniforms.color.rgb;
+	let linear_color = pow(color, vec3f(uMyUniforms.gamma));
 	return vec4f(linear_color, 1.0); // use the interpolated color coming from the vertex shader
 }

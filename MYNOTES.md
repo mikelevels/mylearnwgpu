@@ -154,5 +154,36 @@ Emmanuel finally convinced you to upload your code to github. It is loaded there
 
 Step039_cpp
 
+CONFIRMED All three builds run (wgpu, Dawn, emscripten). The emscripten build from Step037 is FIXED.
+The cause was NOT your code: Chrome removed the `maxInterStageShaderComponents` limit from the
+WebGPU standard and now refuses to create a device when it is set. It is now wrapped in
+#ifndef __EMSCRIPTEN__ in GetRequiredLimits().
+
+The Gamma correction from Step037 now actually applies. The exponent comes from a uniform:
+2.2 when the surface format is sRGB (wgpu-native, format 24) and 1.0 when it is not (Dawn and
+Chrome, format 23). This is the real reason for the color differences noted in Step 025.
+
+IMPORTANT: Visual Studio 2022 had to be REPAIRED with the Visual Studio Installer (cl.exe and
+Windows SDK 10.0.26100 were missing). After a repair Dawn rebuilds from scratch, it takes a while.
+
+IMPORTANT: DO NOT update the default emsdk (C:\Users\gonza\Dev\Lib\emsdk, 3.1.63). This project's
+webgpu distribution is pinned to emscripten 3.1.61. The latest emscripten lives in a SEPARATE emsdk
+(C:\Users\gonza\Dev\Lib\emsdk-latest) and is only used by updatedMyLearnWebGPU.
+
+Step043_cpp
+
+More uniforms. The uniform is now a struct with a vec4f color, the time and the gamma. The vec4f
+MUST come first: a vec4f has to start at an offset that is a multiple of 16 bytes. The C++ struct is
+padded to 32 bytes and two static_asserts check the layout at compile time. See MyNotes/moreUniforms.md.
+
+CONFIRMED All three builds run (wgpu, Dawn, emscripten). The logo is tinted green on all three.
+
+NOTE: The emscripten build does NOT notice when ONLY a resource changes (shader.wgsl). cmake --build
+says "no work to do" and the browser keeps the OLD shader. Touch main.cpp or rebuild until this is fixed.
+
+NOTE: From here on the main guide's chapters are marked as written for an OLDER version of WebGPU.
+The code has to be translated to our version. The newer version of each chapter is followed in
+updatedMyLearnWebGPU, and the differences are written down there in MyNotes.
+
 HERE
 
