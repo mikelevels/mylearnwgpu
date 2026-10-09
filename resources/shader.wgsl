@@ -68,5 +68,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 	// colors channel by channel acts like looking through a colored filter.
 	let color = in.color * uMyUniforms.color.rgb;
 	let linear_color = pow(color, vec3f(uMyUniforms.gamma));
-	return vec4f(linear_color, 1.0); // use the interpolated color coming from the vertex shader
+	// Step044: the alpha now comes from the uniform color, so the second logo
+	// (alpha 0.7) is see-through thanks to the pipeline's blend state.
+	return vec4f(linear_color, uMyUniforms.color.a); // use the interpolated color coming from the vertex shader
 }

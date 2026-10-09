@@ -185,5 +185,17 @@ NOTE: From here on the main guide's chapters are marked as written for an OLDER 
 The code has to be translated to our version. The newer version of each chapter is followed in
 updatedMyLearnWebGPU, and the differences are written down there in MyNotes.
 
+Step044_cpp
+
+Dynamic uniforms. The logo is drawn TWICE in one frame. Both uniform blocks live in the SAME buffer,
+uniformStride (256) bytes apart, and each draw call picks its block with a dynamic offset in
+setBindGroup(). Writing the buffer between two draws does NOT work: draws are only recorded, every
+writeBuffer runs before them at submit. See MyNotes/dynamicUniforms.md.
+
+IMPORTANT: First chapter marked as written for an OLDER version of WebGPU. The guide's code uses
+requiredFeaturesCount and timestampWriteCount which do not exist in our version. Translate, do not paste.
+
+CONFIRMED All three builds run (wgpu, Dawn, emscripten). Uniform stride is 256 bytes on all three.
+
 HERE
 
