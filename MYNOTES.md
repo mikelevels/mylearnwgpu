@@ -146,5 +146,13 @@ All necessary builds are operational at this point!
 
 Step037_cpp
 
+There are a few items that are not correct in the tutorial here. The code for the Gamma correction is outright missing.
+
+Your .WASM emcc build is not working at this point.
+
+Emmanuel finally convinced you to upload your code to github. It is loaded there now and you need to push your code to the remote repository as well now moving forward.
+
+Step039_cpp
+
 HERE
 

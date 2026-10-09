@@ -1,4 +1,21 @@
 /**
+ * Uniforms (Step039): values that are the same for every vertex and fragment
+ * of one draw call. Their memory layout MUST match `struct MyUniforms` in
+ * main.cpp, field for field, because the C++ side copies that struct
+ * byte-for-byte into the uniform buffer.
+ */
+struct MyUniforms {
+	time: f32,   // Seconds since the app started
+	gamma: f32,  // 2.2 if the surface is sRGB, 1.0 otherwise
+	// (the 2 padding floats of the C++ struct do not need to be declared)
+};
+
+// The memory location of the uniform is given by a pair of a *bind group* and
+// a *binding*. Both indices are set up on the C++ side in InitializePipeline()
+// (the layout) and InitializeBindGroups() (the actual buffer).
+@group(0) @binding(0) var<uniform> uMyUniforms: MyUniforms;
+
+/**
  * A structure with fields labeled with vertex attribute locations can be used
  * as input to the entry point of a shader.
  */
@@ -26,7 +43,11 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 	//                         ^^^^^^^^^^^^ We return a custom struct
 	var out: VertexOutput; // create the output struct
 	let ratio = 640.0 / 480.0; // The width and height of the target surface
-	let offset = vec2f(-0.6875, -0.463); // The offset that we want to apply to the position
+	// The offset that we want to apply to the position. It is now a `var`
+	// (not `let`) because we modify it: the logo moves in a circle of radius
+	// 0.3 as time goes on.
+	var offset = vec2f(-0.6875, -0.463);
+	offset += 0.3 * vec2f(cos(uMyUniforms.time), sin(uMyUniforms.time));
 	out.position = vec4f(in.position.x + offset.x, (in.position.y + offset.y) * ratio, 0.0, 1.0);
 	out.color = in.color; // forward the color attribute to the fragment shader
 	return out;
@@ -35,5 +56,10 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 	//     ^^^^^^^^^^^^^^^^ Use for instance the same struct as what the vertex outputs
-	return vec4f(in.color, 1.0); // use the interpolated color coming from the vertex shader
+	// Gamma-correction [CODE THAT WAS MISSING IN Step037_cpp]
+	// The value used to be computed and then thrown away (we returned
+	// in.color). We now return it, with an exponent chosen on the C++ side so
+	// the colors look the same whatever surface format the backend picked.
+	let linear_color = pow(in.color, vec3f(uMyUniforms.gamma));
+	return vec4f(linear_color, 1.0); // use the interpolated color coming from the vertex shader
 }

@@ -28,8 +28,11 @@ bool ResourceManager::loadGeometry(
     float value;
     uint16_t index;
     std::string line;
-    while (!file.eof()) {
-        getline(file, line);
+    // Loop on getline() itself rather than on `!file.eof()`: getline returns
+    // false as soon as there is nothing left to read, whereas eof() only
+    // becomes true AFTER a read has already failed, which would make us
+    // process one extra (empty) line at the end.
+    while (getline(file, line)) {
 
         //overcome the `CRLF` problem
         if (!line.empty() && line.back() == '\r') {
@@ -42,14 +45,21 @@ bool ResourceManager::loadGeometry(
         else if (line == "[indices]") {
             currentSection = Section::Indices;
         }
-        else if (line[0] == '#' || line.empty()) {
-            //DO NOTHING THE FILE CONTAINS A COMMENT
+        else if (line.empty() || line[0] == '#') {
+            //DO NOTHING THE LINE IS EMPTY OR A COMMENT
+            //(check empty() first, so we never look at line[0] of an empty line)
         }
         else if (currentSection == Section::Points) {
             std::istringstream iss(line);
             //Get x,y,r,g,b
             for (int i = 0; i < 5; ++i) {
-                iss >> value;
+                // `iss >> value` evaluates to false if the next word is not a
+                // number or if the line has fewer than 5 values. Before, we
+                // pushed whatever was left in `value` and silently loaded a
+                // broken mesh. Now we report the file as invalid instead.
+                if (!(iss >> value)) {
+                    return false;
+                }
                 pointData.push_back(value);
             }
         }
@@ -57,7 +67,9 @@ bool ResourceManager::loadGeometry(
             std::istringstream iss(line);
             //Get the corners of each triangle...#0 #1 #2
             for (int i = 0; i < 3; ++i) {
-                iss >> index;
+                if (!(iss >> index)) {
+                    return false;
+                }
                 indexData.push_back(index);
             }
         }

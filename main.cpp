@@ -12,6 +12,8 @@
 
 #include <iostream>
 #include <cassert>
+#include <cstddef>// for offsetof
+#include <cmath>// for std::pow
 #include <vector>
 
 #include "ResourceManager.h"
@@ -40,18 +42,50 @@ class Application{
 		void InitializePipeline();
 		wgpu::RequiredLimits GetRequiredLimits(wgpu::Adapter adapter) const;
 		void InitializeBuffers();
+		//Substep of Initialize() that connects the uniform buffer to the pipeline
+		void InitializeBindGroups();
         // All variables shared in the public interface to this class
-        GLFWwindow *window;
-        wgpu::Device device;
-        wgpu::Queue queue;
-        wgpu::Surface surface;
+        GLFWwindow *window = nullptr;
+        wgpu::Device device = nullptr;
+        wgpu::Queue queue = nullptr;
+        wgpu::Surface surface = nullptr;
 		std::unique_ptr<wgpu::ErrorCallback> uncapturedErrorCallbackHandle;
 		wgpu::TextureFormat surfaceFormat = wgpu::TextureFormat::Undefined;
-		wgpu::RenderPipeline pipeline;
-		wgpu::Buffer pointBuffer;
-		wgpu::Buffer indexBuffer;
-		uint32_t indexCount;
+		wgpu::RenderPipeline pipeline = nullptr;
+		wgpu::Buffer pointBuffer = nullptr;
+		wgpu::Buffer indexBuffer = nullptr;
+		uint32_t indexCount = 0;
+
+		// Uniforms (Step039): values that are the same for every vertex and
+		// fragment of one draw call, but that we may change between frames.
+		wgpu::Buffer uniformBuffer = nullptr;
+		// The bind group LAYOUT says what kind of resources the pipeline expects
+		// (here: one uniform buffer at @group(0) @binding(0))...
+		wgpu::BindGroupLayout bindGroupLayout = nullptr;
+		// ...the pipeline LAYOUT is the list of all bind group layouts...
+		wgpu::PipelineLayout pipelineLayout = nullptr;
+		// ...and the BIND GROUP is the actual buffer plugged into that slot.
+		wgpu::BindGroup bindGroup = nullptr;
+
+		// 2.2 if the surface does sRGB conversion, 1.0 otherwise (set in
+		// InitializeBuffers). Used for the shader AND for the clear color.
+		float gamma = 1.0f;
 };
+
+/**
+ * The C++ mirror of the `MyUniforms` struct declared in shader.wgsl.
+ * The two MUST have the same memory layout, field for field, because we copy
+ * this struct byte-for-byte into the uniform buffer.
+ * WGSL requires a uniform struct's size to be a multiple of 16 bytes, which
+ * is why we add padding floats at the end.
+ */
+struct MyUniforms {
+	float time;      // Seconds since the app started (glfwGetTime())
+	float gamma;     // 2.2 when the surface is sRGB, 1.0 otherwise (see shader)
+	float _pad[2];   // Unused, only here to reach 16 bytes
+};
+// Have the compiler double check that we got the size right
+static_assert(sizeof(MyUniforms) % 16 == 0, "MyUniforms must be a multiple of 16 bytes");
 
 int main(int, char**){
     Application app;
@@ -71,6 +105,10 @@ int main(int, char**){
     while(app.IsRunning()){
         app.MainLoop();
     }
+	// Release every GPU object and close the window once the loop ends.
+	// (In the browser the loop above never "ends": the page simply closes,
+	// so there is no equivalent call in the __EMSCRIPTEN__ branch.)
+	app.Terminate();
 #endif
 
     return 0;
@@ -78,13 +116,23 @@ int main(int, char**){
 
 bool Application::Initialize(){
 	// Open window
-	glfwInit();
+	// Every step below can fail (no GPU, driver too old, browser without
+	// WebGPU...). We check each result right away and stop with a clear
+	// message, instead of carrying on and crashing somewhere confusing later.
+	if (!glfwInit()) {
+		std::cerr << "Could not initialize GLFW!" << std::endl;
+		return false;
+	}
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 	glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 	window = glfwCreateWindow(640, 480, "Learn WebGPU", nullptr, nullptr);
-	
+	if (!window) {
+		std::cerr << "Could not open window!" << std::endl;
+		return false;
+	}
+
 	wgpu::Instance instance = wgpuCreateInstance(nullptr);
-	
+
 	//Get adapter
 	std::cout << "Requesting adapter..." << std::endl;
 	surface = glfwGetWGPUSurface(instance, window);
@@ -92,7 +140,11 @@ bool Application::Initialize(){
 	adapterOpts.compatibleSurface = surface;
 	wgpu::Adapter adapter = instance.requestAdapter(adapterOpts);
 	std::cout << "Got adapter: " << adapter << std::endl;
-	
+	if (!adapter) {
+		std::cerr << "Could not get a WebGPU adapter!" << std::endl;
+		return false;
+	}
+
 	instance.release();
 	
 	std::cout << "Requesting device..." << std::endl;
@@ -111,10 +163,16 @@ bool Application::Initialize(){
 	wgpu::RequiredLimits requiredLimits = GetRequiredLimits(adapter);
 	deviceDesc.requiredLimits = &requiredLimits;
 	std::cout << "Got the required limits:" << std::endl;
-	std::cout << "maxInterStageShaderComponents: " << deviceDesc.requiredLimits->limits.maxInterStageShaderComponents << std::endl;
+	std::cout << "maxVertexAttributes: " << deviceDesc.requiredLimits->limits.maxVertexAttributes << std::endl;
 	device = adapter.requestDevice(deviceDesc);
 	std::cout << "Got device: " << device << std::endl;
-	
+	if (!device) {
+		// This is exactly what used to happen in the browser: Chrome refused
+		// one of our required limits, so no device was created.
+		std::cerr << "Could not get a WebGPU device!" << std::endl;
+		return false;
+	}
+
 	//Device error callback
 	uncapturedErrorCallbackHandle = device.setUncapturedErrorCallback([](wgpu::ErrorType type, char const* message){
 		std::cout<<"Uncaptured device error: type "<< type;
@@ -148,13 +206,22 @@ bool Application::Initialize(){
 
 	InitializePipeline();
 	InitializeBuffers();
+	InitializeBindGroups();
 	return true;
 }
 
 void Application::Terminate(){
-	pointBuffer.release();
+	// Release in the reverse order of creation: things that USE an object are
+	// released before the object they use.
+	// (WebGPU objects are reference counted, so a different order would not
+	// crash, but this order is easy to reason about.)
+	bindGroup.release();
+	uniformBuffer.release();
 	indexBuffer.release();
+	pointBuffer.release();
 	pipeline.release();
+	pipelineLayout.release();
+	bindGroupLayout.release();
 	surface.unconfigure();
 	queue.release();
 	surface.release();
@@ -170,10 +237,16 @@ void Application::MainLoop(){
 	wgpu::TextureView targetView = GetNextSurfaceTextureView();
 	if (!targetView) return;
 
+	// Update the uniform buffer with the current time.
+	// We only overwrite the `time` field: `offsetof` gives where it sits inside
+	// MyUniforms, so the other fields (gamma) keep the value set at startup.
+	float t = static_cast<float>(glfwGetTime());
+	queue.writeBuffer(uniformBuffer, offsetof(MyUniforms, time), &t, sizeof(float));
+
 	// Create a command encoder for the draw call
 	wgpu::CommandEncoderDescriptor encoderDesc = {};
 	encoderDesc.label = "My command encoder";
-	wgpu::CommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device, &encoderDesc);
+	wgpu::CommandEncoder encoder = device.createCommandEncoder(encoderDesc);
 
 	// Create the render pass that clears the screen with our color
 	wgpu::RenderPassDescriptor renderPassDesc = {};
@@ -184,7 +257,12 @@ void Application::MainLoop(){
 	renderPassColorAttachment.resolveTarget = nullptr;
 	renderPassColorAttachment.loadOp = wgpu::LoadOp::Clear;
 	renderPassColorAttachment.storeOp = wgpu::StoreOp::Store;
-	renderPassColorAttachment.clearValue = WGPUColor{ 0.05, 0.05, 0.05, 1.0 };
+	// The clear color goes through the same sRGB conversion as our shader's
+	// output, so it needs the same gamma correction to look identical on
+	// every backend (otherwise it is near-black in the browser and grey with
+	// wgpu-native).
+	double background = std::pow(0.05, gamma);
+	renderPassColorAttachment.clearValue = WGPUColor{ background, background, background, 1.0 };
 #ifndef WEBGPU_BACKEND_WGPU
 	renderPassColorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
 #endif // NOT WEBGPU_BACKEND_WGPU
@@ -206,6 +284,11 @@ void Application::MainLoop(){
 	//we are done with creating the index buffer
 	renderPass.setIndexBuffer(indexBuffer, wgpu::IndexFormat::Uint16, 0, indexBuffer.getSize());
 
+	//Plug our bind group into slot @group(0) of the shader, so that uMyUniforms
+	//reads from uniformBuffer. (The last two arguments are for "dynamic
+	//offsets", which we do not use.)
+	renderPass.setBindGroup(0, bindGroup, 0, nullptr);
+
 	//Replace 'draw()' with 'drawIndexed()' and 'vertexCount' with 'indexCount'
 	//The extra argument is an offset within the index buffer.
 	renderPass.drawIndexed(indexCount, 1, 0, 0, 0);
@@ -219,12 +302,10 @@ void Application::MainLoop(){
 	wgpu::CommandBuffer command = encoder.finish(cmdBufferDescriptor);
 	encoder.release();
 
-	std::cout << "Submitting command..." << std::endl;
+	// No logging here: this function runs ~60 times per second, and printing
+	// every frame floods the console and slows the app down.
 	queue.submit(1, &command);
 	command.release();
-	std::cout << "Command submitted." << std::endl;
-
-	std::cout << "Surface format: "<< surfaceFormat << std::endl;
 
 	// At the end of the frame
 	targetView.release();
@@ -368,7 +449,34 @@ void Application::InitializePipeline(){
 
 	// Default value as well(not relevant for count=1)
 	pipelineDesc.multisample.alphaToCoverageEnabled = false;
-	pipelineDesc.layout = nullptr;
+
+	// Describe the resources the shader expects (Step039).
+	// Until now we let WebGPU guess the layout (layout = nullptr). From now on
+	// we declare it explicitly, so that the bind group we create later is
+	// guaranteed to match it.
+	//
+	// One binding: a uniform buffer at @binding(0), visible to both shader
+	// stages (the vertex shader reads `time`, the fragment shader `gamma`).
+	wgpu::BindGroupLayoutEntry bindingLayout = wgpu::Default;
+	bindingLayout.binding = 0;// @binding(0)
+	bindingLayout.visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
+	bindingLayout.buffer.type = wgpu::BufferBindingType::Uniform;
+	bindingLayout.buffer.minBindingSize = sizeof(MyUniforms);
+
+	// A bind group layout is a list of binding layouts (we have only one)
+	wgpu::BindGroupLayoutDescriptor bindGroupLayoutDesc{};
+	bindGroupLayoutDesc.entryCount = 1;
+	bindGroupLayoutDesc.entries = &bindingLayout;
+	bindGroupLayout = device.createBindGroupLayout(bindGroupLayoutDesc);
+
+	// A pipeline layout is a list of bind group layouts: index 0 in this list
+	// is @group(0) in the shader.
+	wgpu::PipelineLayoutDescriptor layoutDesc{};
+	layoutDesc.bindGroupLayoutCount = 1;
+	layoutDesc.bindGroupLayouts = (WGPUBindGroupLayout*)&bindGroupLayout;
+	pipelineLayout = device.createPipelineLayout(layoutDesc);
+
+	pipelineDesc.layout = pipelineLayout;
 
 	pipeline = device.createRenderPipeline(pipelineDesc);
 
@@ -396,7 +504,20 @@ wgpu::RequiredLimits Application::GetRequiredLimits(wgpu::Adapter adapter) const
 	//												   ^ This was a 2
 
 	// There is a maximum of 3 float forwarded from vertex to fragment shader
+	// Chrome has since removed this limit from the WebGPU standard and now
+	// REFUSES to create a device if we set it. This is what broke the browser
+	// build at Step037. Desktop backends (wgpu-native v0.19, Dawn 6536) are
+	// older than that change and still know it, so we only skip it in the browser.
+#ifndef __EMSCRIPTEN__
 	requiredLimits.limits.maxInterStageShaderComponents = 3;
+#endif // NOT __EMSCRIPTEN__
+
+	// We use at most 1 bind group for now
+	requiredLimits.limits.maxBindGroups = 1;
+	// Use at most 1 uniform buffer per stage
+	requiredLimits.limits.maxUniformBuffersPerShaderStage = 1;
+	// Uniform structs have a size of maximum 16 float (more than what we need)
+	requiredLimits.limits.maxUniformBufferBindingSize = 16*4;
 
 	// These two limits are different because they are "minimum" limits,
 	// they are the only ones we may forward from the adapter's supported
@@ -426,6 +547,16 @@ void Application::InitializeBuffers(){
 
 	indexCount = static_cast<uint32_t>(indexData.size());
 
+	// writeBuffer only accepts sizes that are a multiple of 4 bytes, but each
+	// index is 2 bytes. With an odd number of indices (15 in webgpu.txt) we
+	// would copy 2 bytes past the end of indexData, i.e. read memory that does
+	// not belong to us. Adding a dummy 0 index makes the vector itself long
+	// enough. It is never drawn, because drawIndexed uses indexCount (saved
+	// above, before the padding).
+	if (indexData.size() % 2 != 0) {
+		indexData.push_back(0);
+	}
+
 	//Create a POINT buffer
 	wgpu::BufferDescriptor bufferDesc;
 	bufferDesc.size = pointData.size()*sizeof(float);
@@ -438,10 +569,51 @@ void Application::InitializeBuffers(){
 
 	//Create index buffer
 	//(we reuse the bufferDesc initialized for the pointBuffer)
-	bufferDesc.size = indexData.size()*sizeof(uint16_t);
-	bufferDesc.size = (bufferDesc.size + 3) & ~3;//round up to the nearest multiple of 4
+	bufferDesc.size = indexData.size()*sizeof(uint16_t);// already a multiple of 4, see padding above
 	bufferDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Index;
 	indexBuffer = device.createBuffer(bufferDesc);
 
 	queue.writeBuffer(indexBuffer, 0 , indexData.data(), bufferDesc.size);
+
+	//Create uniform buffer (reusing bufferDesc from the other buffers)
+	//It holds exactly one MyUniforms struct.
+	bufferDesc.size = sizeof(MyUniforms);
+	//Make sure to flag the buffer as BufferUsage::Uniform
+	bufferDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Uniform;
+	bufferDesc.mappedAtCreation = false;
+	uniformBuffer = device.createBuffer(bufferDesc);
+
+	//Upload the initial uniform values
+	MyUniforms uniforms = {};
+	uniforms.time = 0.0f;
+	// Gamma correction. Our colors in webgpu.txt are written in sRGB (the
+	// space color pickers use). If the surface is an *sRGB* format, the GPU
+	// converts linear -> sRGB when writing pixels, so we must first convert
+	// our sRGB colors to linear (pow 2.2) or they come out washed out.
+	// If the surface is a plain (non-sRGB) format, nothing is converted and we
+	// must leave the colors alone (pow 1.0). Which one we get depends on the
+	// backend: wgpu-native usually picks BGRA8UnormSrgb, Dawn and browsers
+	// usually BGRA8Unorm. This is why your Step025 note saw different colors.
+	bool isSrgb = surfaceFormat == wgpu::TextureFormat::BGRA8UnormSrgb
+		|| surfaceFormat == wgpu::TextureFormat::RGBA8UnormSrgb;
+	gamma = isSrgb ? 2.2f : 1.0f;
+	uniforms.gamma = gamma;
+	std::cout << "Surface format: " << surfaceFormat << " (sRGB: " << (isSrgb ? "yes" : "no") << ")" << std::endl;
+	queue.writeBuffer(uniformBuffer, 0, &uniforms, sizeof(MyUniforms));
+}
+
+void Application::InitializeBindGroups(){
+	// The bind group is where we say WHICH buffer goes into each binding
+	// declared by bindGroupLayout. One entry per binding.
+	wgpu::BindGroupEntry binding{};
+	binding.binding = 0;// Must match bindingLayout.binding and @binding(0)
+	binding.buffer = uniformBuffer;
+	binding.offset = 0;// We use the buffer from its very beginning...
+	binding.size = sizeof(MyUniforms);// ...up to the size of our struct
+
+	wgpu::BindGroupDescriptor bindGroupDesc{};
+	bindGroupDesc.layout = bindGroupLayout;// The bind group must follow this layout
+	bindGroupDesc.entryCount = 1;
+	bindGroupDesc.entries = &binding;
+	bindGroup = device.createBindGroup(bindGroupDesc);
 }
