@@ -212,5 +212,19 @@ NOTE: The faces overlap in the WRONG order. Expected: no depth buffer yet (next 
 
 CONFIRMED All three builds run (wgpu, Dawn, emscripten).
 
+Step052_cpp
+
+Depth buffer. A Depth24Plus texture (640 x 480) + a DepthStencilState (Less, write enabled) in the
+pipeline + a depth attachment in the render pass (clear to 1.0). The shader outputs the real depth,
+squeezed into 0..1 with z * 0.5 + 0.5. The faces are now in the RIGHT order. See MyNotes/depthBuffer.md.
+
+IMPORTANT: The guide uses an #ifdef so that wgpu-native gets Clear/Store stencil ops and Dawn/Chrome get
+Undefined. TESTED: our wgpu-native v0.19 accepts Undefined too (no error, same picture), so there is no
+#ifdef: Undefined on all three builds.
+
+NOTE: The depth texture size is hard-coded to the window size. It must be re-created when resizing.
+
+CONFIRMED All three builds run (wgpu, Dawn, emscripten).
+
 HERE
 

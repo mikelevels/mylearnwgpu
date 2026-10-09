@@ -68,11 +68,13 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 		alpha * in.position.z - beta * in.position.y,
 	);
 
-	// We still throw z away (0.0) when writing the output position: there is
-	// no depth buffer and no perspective yet. This is why the triangles are
-	// not drawn in the right order: whichever is drawn LAST ends up on top,
-	// even when it is behind. The next chapter (Depth buffer) fixes that.
-	out.position = vec4f(position.x, position.y * ratio, 0.0, 1.0);
+	// Step052: we now output the real depth instead of 0.0, so the depth test
+	// can tell which triangle is in front.
+	// WebGPU keeps only the depths between 0.0 (near) and 1.0 (far). Our
+	// pyramid's z goes from about -1 to +1, so we squeeze it into 0..1 with
+	// z * 0.5 + 0.5. This is a temporary trick: the projection matrix of the
+	// next chapters does this properly.
+	out.position = vec4f(position.x, position.y * ratio, position.z * 0.5 + 0.5, 1.0);
 	out.color = in.color; // forward the color attribute to the fragment shader
 	return out;
 }

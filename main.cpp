@@ -45,6 +45,8 @@ class Application{
 		void InitializeBuffers();
 		//Substep of Initialize() that connects the uniform buffer to the pipeline
 		void InitializeBindGroups();
+		//Substep of Initialize() that creates the depth texture (Step052)
+		void InitializeDepthBuffer();
         // All variables shared in the public interface to this class
         GLFWwindow *window = nullptr;
         wgpu::Device device = nullptr;
@@ -74,6 +76,14 @@ class Application{
 		// Step050: the dynamic uniforms of Step044 (two logos from one buffer)
 		// are rolled back, like in the guide, to keep the 3D code simple.
 		// That version is still in git history: commit f446f3e.
+
+		// Depth buffer (Step052), a.k.a. Z-buffer: a texture the size of the
+		// window that stores, for each pixel, the depth of the closest
+		// fragment drawn so far. The pipeline needs its FORMAT, the render
+		// pass needs a VIEW of it.
+		wgpu::TextureFormat depthTextureFormat = wgpu::TextureFormat::Depth24Plus;
+		wgpu::Texture depthTexture = nullptr;
+		wgpu::TextureView depthTextureView = nullptr;
 };
 
 /**
@@ -224,6 +234,7 @@ bool Application::Initialize(){
 	adapter.release();
 
 	InitializePipeline();
+	InitializeDepthBuffer();
 	InitializeBuffers();
 	InitializeBindGroups();
 	return true;
@@ -238,6 +249,11 @@ void Application::Terminate(){
 	uniformBuffer.release();
 	indexBuffer.release();
 	pointBuffer.release();
+	// Step052: the view first, then the texture. destroy() frees the GPU
+	// memory right away; release() drops our handle to the object.
+	depthTextureView.release();
+	depthTexture.destroy();
+	depthTexture.release();
 	pipeline.release();
 	pipelineLayout.release();
 	bindGroupLayout.release();
@@ -289,7 +305,34 @@ void Application::MainLoop(){
 
 	renderPassDesc.colorAttachmentCount = 1;
 	renderPassDesc.colorAttachments = &renderPassColorAttachment;
-	renderPassDesc.depthStencilAttachment = nullptr;
+
+	// Step052: we now add a depth/stencil attachment, next to the color one.
+	wgpu::RenderPassDepthStencilAttachment depthStencilAttachment;
+	// The view of the depth texture created in InitializeDepthBuffer()
+	depthStencilAttachment.view = depthTextureView;
+	// The initial value of the depth buffer: 1.0 means "as far as possible",
+	// so the first fragment drawn on each pixel always passes the test.
+	depthStencilAttachment.depthClearValue = 1.0f;
+	// Same idea as the color attachment: clear at the start of the pass,
+	// keep the result at the end.
+	depthStencilAttachment.depthLoadOp = wgpu::LoadOp::Clear;
+	depthStencilAttachment.depthStoreOp = wgpu::StoreOp::Store;
+	// We could turn off writing to the depth buffer for the whole pass here
+	depthStencilAttachment.depthReadOnly = false;
+
+	// Stencil setup: mandatory fields, but we do not use a stencil.
+	// Depth24Plus has NO stencil part, so the stencil ops must be Undefined
+	// (Dawn and Chrome reject anything else).
+	// The guide wraps this in #ifdef WEBGPU_BACKEND_WGPU and uses Clear/Store
+	// for wgpu-native. We tested Undefined with OUR wgpu-native (v0.19): no
+	// error and the same picture, so one version works for all three builds
+	// and we avoid an #ifdef.
+	depthStencilAttachment.stencilClearValue = 0;
+	depthStencilAttachment.stencilLoadOp = wgpu::LoadOp::Undefined;
+	depthStencilAttachment.stencilStoreOp = wgpu::StoreOp::Undefined;
+	depthStencilAttachment.stencilReadOnly = true;
+
+	renderPassDesc.depthStencilAttachment = &depthStencilAttachment;
 	renderPassDesc.timestampWrites = nullptr;
 
 	wgpu::RenderPassEncoder renderPass = encoder.beginRenderPass(renderPassDesc);
@@ -459,8 +502,22 @@ void Application::InitializePipeline(){
 	fragmentState.targets = &colorTarget;
 	pipelineDesc.fragment = &fragmentState;
 
-	// We do not use stencil/depth testing for now
-	pipelineDesc.depthStencil = nullptr;
+	// Step052: depth testing. For each fragment, the GPU compares its depth
+	// with the one already stored in the depth buffer for that pixel.
+	wgpu::DepthStencilState depthStencilState = wgpu::Default;
+	// Keep a fragment only if its depth is LOWER (closer) than the stored one.
+	// (The default is Always, which is the same as no depth test at all.)
+	depthStencilState.depthCompare = wgpu::CompareFunction::Less;
+	// Each time a fragment is kept, store its depth so later fragments are
+	// compared against it.
+	depthStencilState.depthWriteEnabled = true;
+	// Must be the same format as the depth texture (see InitializeDepthBuffer)
+	depthStencilState.format = depthTextureFormat;
+	// Deactivate the stencil altogether
+	depthStencilState.stencilReadMask = 0;
+	depthStencilState.stencilWriteMask = 0;
+
+	pipelineDesc.depthStencil = &depthStencilState;
 
 	//Samples per pixel
 	pipelineDesc.multisample.count = 1;
@@ -550,6 +607,13 @@ wgpu::RequiredLimits Application::GetRequiredLimits(wgpu::Adapter adapter) const
 	requiredLimits.limits.minUniformBufferOffsetAlignment = supportedLimits.limits.minUniformBufferOffsetAlignment;
 	requiredLimits.limits.minStorageBufferOffsetAlignment = supportedLimits.limits.minStorageBufferOffsetAlignment;
 
+	// Step052: for the depth buffer we now use a texture, up to the size of
+	// the window (640 x 480). The guide sets the 1D limit to 480; we do not
+	// use 1D textures, it is just "something small".
+	requiredLimits.limits.maxTextureDimension1D = 480;
+	requiredLimits.limits.maxTextureDimension2D = 640;
+	requiredLimits.limits.maxTextureArrayLayers = 1;
+
 	return requiredLimits;
 }
 
@@ -631,6 +695,39 @@ void Application::InitializeBuffers(){
 	uniforms.gamma = gamma;
 	std::cout << "Surface format: " << surfaceFormat << " (sRGB: " << (isSrgb ? "yes" : "no") << ")" << std::endl;
 	queue.writeBuffer(uniformBuffer, 0, &uniforms, sizeof(MyUniforms));
+}
+
+void Application::InitializeDepthBuffer(){
+	// Create the depth texture (Step052).
+	// It must be exactly the size of the surface we draw to: 640 x 480.
+	// (Hard-coded for now, like the window. It will have to be re-created
+	// when we allow resizing, in "Resizing the window".)
+	wgpu::TextureDescriptor depthTextureDesc;
+	depthTextureDesc.dimension = wgpu::TextureDimension::_2D;
+	depthTextureDesc.format = depthTextureFormat;
+	depthTextureDesc.mipLevelCount = 1;
+	depthTextureDesc.sampleCount = 1;
+	depthTextureDesc.size = {640, 480, 1};
+	// The only thing we do with it is use it as a render pass attachment
+	depthTextureDesc.usage = wgpu::TextureUsage::RenderAttachment;
+	depthTextureDesc.viewFormatCount = 1;
+	depthTextureDesc.viewFormats = (WGPUTextureFormat*)&depthTextureFormat;
+	depthTexture = device.createTexture(depthTextureDesc);
+	std::cout << "Depth texture: " << depthTexture << std::endl;
+
+	// Create the view of the depth texture used by the render pass.
+	// A texture can hold many images (mip levels, array layers) and a view
+	// says which part we use. Here: the whole texture, depth part only.
+	wgpu::TextureViewDescriptor depthTextureViewDesc;
+	depthTextureViewDesc.aspect = wgpu::TextureAspect::DepthOnly;
+	depthTextureViewDesc.baseArrayLayer = 0;
+	depthTextureViewDesc.arrayLayerCount = 1;
+	depthTextureViewDesc.baseMipLevel = 0;
+	depthTextureViewDesc.mipLevelCount = 1;
+	depthTextureViewDesc.dimension = wgpu::TextureViewDimension::_2D;
+	depthTextureViewDesc.format = depthTextureFormat;
+	depthTextureView = depthTexture.createView(depthTextureViewDesc);
+	std::cout << "Depth texture view: " << depthTextureView << std::endl;
 }
 
 void Application::InitializeBindGroups(){
