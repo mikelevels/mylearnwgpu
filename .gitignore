@@ -1,1 +1,6 @@
-./build*/
+# Build folders (build-wgpu, build-dawn, build-emscripten...) and the IDE's own
+# folders. Git does not understand a leading "./" (the old "./build*/" matched
+# nothing); a leading "/" means "at the root of the repository".
+/build*/
+/out/
+/.vs/

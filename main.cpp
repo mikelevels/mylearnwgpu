@@ -16,6 +16,8 @@
 #include <cmath>// for std::pow
 #include <array>// for std::array (Step043)
 #include <vector>
+#include <memory>// for std::unique_ptr (it only arrived through webgpu.hpp before)
+#include <utility>// for std::pair
 
 #include "ResourceManager.h"
 
@@ -38,17 +40,27 @@ class Application{
         bool IsRunning();
 
     private:
-        wgpu::TextureView GetNextSurfaceTextureView();
-		//Substep of Initilize() that creates the render pipeline
-		void InitializePipeline();
+		// Get the texture to draw into this frame and a view of it. The
+		// texture is returned too because it must be released (see the .cpp).
+		std::pair<wgpu::SurfaceTexture, wgpu::TextureView> GetNextSurfaceViewData();
+		//Substep of Initialize() that creates the render pipeline
+		//(returns false if the shader could not be loaded)
+		bool InitializePipeline();
 		wgpu::RequiredLimits GetRequiredLimits(wgpu::Adapter adapter) const;
-		void InitializeBuffers();
+		//Substep of Initialize() that loads the geometry and creates the buffers
+		//(returns false if the geometry file could not be loaded)
+		bool InitializeBuffers();
 		//Substep of Initialize() that connects the uniform buffer to the pipeline
 		void InitializeBindGroups();
 		//Substep of Initialize() that creates the depth texture (Step052)
 		void InitializeDepthBuffer();
-        // All variables shared in the public interface to this class
+        // All the state shared by the methods of this class (private: only
+        // the Application itself can touch it)
         GLFWwindow *window = nullptr;
+		// The instance is KEPT for the whole life of the app. Releasing it
+		// right after getting the adapter (as we used to) shuts down Dawn's
+		// event system, so callbacks such as "device lost" could never fire.
+		wgpu::Instance instance = nullptr;
         wgpu::Device device = nullptr;
         wgpu::Queue queue = nullptr;
         wgpu::Surface surface = nullptr;
@@ -160,7 +172,11 @@ bool Application::Initialize(){
 		return false;
 	}
 
-	wgpu::Instance instance = wgpuCreateInstance(nullptr);
+	instance = wgpuCreateInstance(nullptr);
+	if (!instance) {
+		std::cerr << "Could not create a WebGPU instance!" << std::endl;
+		return false;
+	}
 
 	//Get adapter
 	std::cout << "Requesting adapter..." << std::endl;
@@ -174,8 +190,8 @@ bool Application::Initialize(){
 		return false;
 	}
 
-	instance.release();
-	
+	// (No instance.release() here anymore: see the `instance` member.)
+
 	std::cout << "Requesting device..." << std::endl;
 	wgpu::DeviceDescriptor deviceDesc = {};
 	deviceDesc.label = "My Device";
@@ -183,6 +199,10 @@ bool Application::Initialize(){
 	deviceDesc.requiredLimits = nullptr;
 	deviceDesc.defaultQueue.nextInChain = nullptr;
 	deviceDesc.defaultQueue.label = "The default queue";
+	// NOTE: now that the instance stays alive, Dawn can deliver this callback.
+	// It also fires when we release everything on exit: with Dawn you will
+	// see "Device lost: reason 3 (A valid external Instance reference no
+	// longer exists.)" when you close the window. That is EXPECTED.
 	deviceDesc.deviceLostCallback = [](WGPUDeviceLostReason reason, char const* message, void* /* pUserData */) {
 		std::cout << "Device lost: reason " << reason;
 		if (message) std::cout << " (" << message << ")";
@@ -233,9 +253,11 @@ bool Application::Initialize(){
 	// Release the adapter only after it has been fully utilized
 	adapter.release();
 
-	InitializePipeline();
+	// These substeps used to call exit(1) on failure, which skipped all
+	// cleanup. They now report failure and we pass it up to main().
+	if (!InitializePipeline()) return false;
 	InitializeDepthBuffer();
-	InitializeBuffers();
+	if (!InitializeBuffers()) return false;
 	InitializeBindGroups();
 	return true;
 }
@@ -261,6 +283,8 @@ void Application::Terminate(){
 	queue.release();
 	surface.release();
 	device.release();
+	// The instance goes last: everything above was created through it.
+	instance.release();
     glfwDestroyWindow(window);
     glfwTerminate();
 }
@@ -268,8 +292,9 @@ void Application::Terminate(){
 void Application::MainLoop(){
 	glfwPollEvents();
 
-	// Get the next target texture view
-	wgpu::TextureView targetView = GetNextSurfaceTextureView();
+	// Get the next target texture view (and the texture itself, which we
+	// must release at the right moment, see GetNextSurfaceViewData)
+	auto [surfaceTexture, targetView] = GetNextSurfaceViewData();
 	if (!targetView) return;
 
 	// Update the uniform buffer with the current time.
@@ -343,8 +368,8 @@ void Application::MainLoop(){
 	//Set POINT buffer while encoding the render pass
 	renderPass.setVertexBuffer(0, pointBuffer, 0, pointBuffer.getSize());
 
-	//The second argument must correspond to the choice of uint16_t or uint32_t
-	//we are done with creating the index buffer
+	//The second argument must match the type of our index data: uint16_t
+	//here (Uint16), it would be Uint32 for a std::vector<uint32_t>
 	renderPass.setIndexBuffer(indexBuffer, wgpu::IndexFormat::Uint16, 0, indexBuffer.getSize());
 
 	//Plug our bind group into slot @group(0) of the shader, so that uMyUniforms
@@ -375,6 +400,13 @@ void Application::MainLoop(){
 	surface.present();
 #endif
 
+#ifdef WEBGPU_BACKEND_WGPU
+	// wgpu-native only: the surface texture must be released AFTER present().
+	// Releasing it earlier makes wgpu-native throw the frame away. (Dawn and
+	// the browser already released it in GetNextSurfaceViewData.)
+	wgpuTextureRelease(surfaceTexture.texture);
+#endif // WEBGPU_BACKEND_WGPU
+
 #if defined(WEBGPU_BACKEND_DAWN)
 	device.tick();
 #elif defined(WEBGPU_BACKEND_WGPU)
@@ -386,12 +418,16 @@ bool Application::IsRunning(){
     return !glfwWindowShouldClose(window);
 };
 
-wgpu::TextureView Application::GetNextSurfaceTextureView(){
+std::pair<wgpu::SurfaceTexture, wgpu::TextureView> Application::GetNextSurfaceViewData(){
     // Get the surface texture
 	wgpu::SurfaceTexture surfaceTexture;
 	surface.getCurrentTexture(&surfaceTexture);
 	if (surfaceTexture.status != wgpu::SurfaceGetCurrentTextureStatus::Success) {
-		return nullptr;
+		// Even on failure we may have been handed a texture: give it back.
+		if (surfaceTexture.texture) {
+			wgpuTextureRelease(surfaceTexture.texture);
+		}
+		return { surfaceTexture, nullptr };
 	}
 	wgpu::Texture texture = surfaceTexture.texture;
 
@@ -407,18 +443,30 @@ wgpu::TextureView Application::GetNextSurfaceTextureView(){
 	viewDescriptor.aspect = wgpu::TextureAspect::All;
 	wgpu::TextureView targetView = texture.createView(viewDescriptor);
 
-	return targetView;
+	// BUG FIX (found by the design review, measured on Dawn): every call to
+	// getCurrentTexture() hands us a NEW reference to the texture, and we
+	// never gave it back. Dawn's memory grew by about 70 KB per second.
+	// The view keeps its own reference, so we can release ours right away...
+#ifndef WEBGPU_BACKEND_WGPU
+	wgpuTextureRelease(surfaceTexture.texture);
+#endif // NOT WEBGPU_BACKEND_WGPU
+	// ...except on wgpu-native, where it must wait until after present()
+	// (done at the end of MainLoop). This is how the guide's current
+	// "First Color" chapter does it; our older copy of that chapter did not.
+
+	return { surfaceTexture, targetView };
 }
 
-void Application::InitializePipeline(){
+bool Application::InitializePipeline(){
 	std::cout << "Creating shader module..." << std::endl;
 	wgpu::ShaderModule shaderModule = ResourceManager::loadShaderModule(RESOURCE_DIR "/shader.wgsl", device);
 	std::cout << "Shader module: " << shaderModule << std::endl;
 
-	// Check for errors
+	// Check for errors (only catches a MISSING file: a typo inside the WGSL is
+	// reported later by the uncaptured error callback)
 	if (shaderModule == nullptr) {
 		std::cerr << "Could not load shader!" << std::endl;
-		exit(1);
+		return false;
 	}
 	//Create the render pipeline
 	wgpu::RenderPipelineDescriptor pipelineDesc;
@@ -450,7 +498,7 @@ void Application::InitializePipeline(){
 	pipelineDesc.vertex.bufferCount = 1;
 	pipelineDesc.vertex.buffers = &vertexBufferLayout;
 
-	//Defined the 'shaderModule' in the second part of this chapter
+	//The 'shaderModule' was loaded at the top of this function
 	// Here we tell that the programmable vertex shader stage is described
 	// by the function called 'vs_main' in that module.
 	pipelineDesc.vertex.module = shaderModule;
@@ -560,6 +608,7 @@ void Application::InitializePipeline(){
 
 	//We no longer need to access the shader module
 	shaderModule.release();
+	return true;
 }
 
 wgpu::RequiredLimits Application::GetRequiredLimits(wgpu::Adapter adapter) const{
@@ -570,9 +619,9 @@ wgpu::RequiredLimits Application::GetRequiredLimits(wgpu::Adapter adapter) const
 	//Don't forget to = Default
 	wgpu::RequiredLimits requiredLimits = wgpu::Default;
 
-	//We use at most 1 vertex attribute for now
+	//We use 2 vertex attributes: position and color
 	requiredLimits.limits.maxVertexAttributes = 2;
-	//We should also tell that we use 1 vertex buffers
+	//...and 1 vertex buffer
 	requiredLimits.limits.maxVertexBuffers = 1;
 	//Maximum size of a buffer: the biggest of our buffers.
 	// - the point buffer: 5 points of 6 floats each (pyramid.txt) = 120 bytes
@@ -617,7 +666,7 @@ wgpu::RequiredLimits Application::GetRequiredLimits(wgpu::Adapter adapter) const
 	return requiredLimits;
 }
 
-void Application::InitializeBuffers(){
+bool Application::InitializeBuffers(){
 	//Vertex buffer data
 	//Step050: there are now 6 floats per vertex: x, y, z then r, g, b.
 	std::vector<float> pointData;
@@ -632,7 +681,7 @@ void Application::InitializeBuffers(){
 	// Check for errors
 	if (!success) {
 		std::cerr << "Could not load geometry!" << std::endl;
-		exit(1);
+		return false;
 	}
 
 	indexCount = static_cast<uint32_t>(indexData.size());
@@ -695,6 +744,7 @@ void Application::InitializeBuffers(){
 	uniforms.gamma = gamma;
 	std::cout << "Surface format: " << surfaceFormat << " (sRGB: " << (isSrgb ? "yes" : "no") << ")" << std::endl;
 	queue.writeBuffer(uniformBuffer, 0, &uniforms, sizeof(MyUniforms));
+	return true;
 }
 
 void Application::InitializeDepthBuffer(){

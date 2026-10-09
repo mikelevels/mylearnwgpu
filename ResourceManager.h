@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include <filesystem>
+#include <cstdint>// for uint16_t (it only arrived through other headers before)
 #include <webgpu/webgpu.hpp>
 
 class ResourceManager{

@@ -240,5 +240,26 @@ NOTE: The guide claims WGSL only has square matrices. Wrong: mat4x3f etc. exist.
 
 CONFIRMED All three builds run (wgpu, Dawn, emscripten).
 
+Fix_after_Step054
+
+Bug fixes found by the engine design review (see engine-gameplan.md):
+
+BUG: The surface texture LEAKED every frame on Dawn and in the browser. getCurrentTexture() returns a NEW
+reference each frame and we never released it. MEASURED on Dawn: memory grew ~1.5 MB in 21 seconds
+before the fix, flat after. Released right after createView() (Dawn, browser) or after present()
+(wgpu-native only, otherwise wgpu throws the frame away). This is how the guide's CURRENT "First Color"
+chapter does it: your older copy of that chapter did not have it.
+
+BUG: The instance was released right after getting the adapter. On Dawn that shuts down its event system.
+The instance is now a member, released LAST in Terminate().
+NOTE: Dawn now prints "Device lost: reason 3 (A valid external Instance reference no longer exists.)"
+when you close the window. EXPECTED.
+
+FIXED: InitializePipeline() and InitializeBuffers() return false instead of calling exit(1).
+FIXED: .gitignore ("./build*/" matched nothing, now "/build*/"), .vs/ untracked (still on disk), empty
+"Checking" and "Creating" files removed. Stale comments and missing #includes fixed.
+
+CONFIRMED All three builds run (wgpu, Dawn, emscripten).
+
 HERE
 
