@@ -261,5 +261,20 @@ FIXED: .gitignore ("./build*/" matched nothing, now "/build*/"), .vs/ untracked 
 
 CONFIRMED All three builds run (wgpu, Dawn, emscripten).
 
+Step055_cpp
+
+Projection matrices. The shader now does projection * view * model * position with matrices computed on
+the CPU and sent in the uniform buffer (224 bytes: 3 mat4x4 first, then color, time, gamma). The
+perspective matrix copies z into w and the GPU divides by w: far things look smaller. It also maps depth
+into 0..1, replacing the z * 0.5 + 0.5 trick. See MyNotes/projectionMatrices.md.
+
+NEW LIBRARY: GLM 0.9.9.8 (header-only, glm/ folder, copied from the guide's repo, no download).
+GLM_FORCE_DEPTH_ZERO_TO_ONE and GLM_FORCE_LEFT_HANDED MUST be defined before the include.
+
+IMPORTANT: maxUniformBufferBindingSize raised from 64 to 256 bytes. wgpu-native applies limits EXACTLY,
+Dawn silently rounds small ones up, so Dawn alone would not have shown the problem.
+
+CONFIRMED All three builds run (wgpu, Dawn, emscripten). The pyramid orbits the center with perspective.
+
 HERE
 

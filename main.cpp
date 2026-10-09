@@ -19,7 +19,65 @@
 #include <memory>// for std::unique_ptr (it only arrived through webgpu.hpp before)
 #include <utility>// for std::pair
 
+// GLM ("OpenGL Mathematics", Step055): vectors and matrices on the C++ side,
+// with the same names and layout as in shaders (vec3, vec4, mat4x4...).
+// It is header-only: the glm/ folder at the root of the project is all of it.
+// The two defines MUST come before the include:
+// - DEPTH_ZERO_TO_ONE: WebGPU keeps depths between 0 and 1 (OpenGL, which
+//   GLM was made for, uses -1 to 1).
+// - LEFT_HANDED: x to the right, y up, z going INTO the screen, like WebGPU's
+//   clip space. (OpenGL's z comes out of the screen.)
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#define GLM_FORCE_LEFT_HANDED
+#include <glm/glm.hpp> // all types inspired from GLSL
+#include <glm/ext.hpp> // glm::perspective, glm::rotate, glm::translate...
+
+using glm::mat4x4;
+using glm::vec4;
+using glm::vec3;
+
 #include "ResourceManager.h"
+
+constexpr float PI = 3.14159265358979323846f;
+
+/**
+ * The C++ mirror of the `MyUniforms` struct declared in shader.wgsl.
+ * The two MUST have the same memory layout, field for field, because we copy
+ * this struct byte-for-byte into the uniform buffer.
+ *
+ * Memory layout rules (Step043, "More uniforms"), from the WGSL spec's
+ * "address space layout constraints":
+ *  1. ALIGNMENT: each field must start at an offset that is a multiple of its
+ *     alignment. A mat4x4f and a vec4f have an alignment of 16 bytes, an f32
+ *     of 4 bytes. So the big fields go first:
+ *        offset   0: projectionMatrix (64 bytes)   <- Step055
+ *        offset  64: viewMatrix       (64 bytes)   <- Step055
+ *        offset 128: modelMatrix      (64 bytes)   <- Step055
+ *        offset 192: color            (16 bytes)
+ *        offset 208: time             ( 4 bytes)
+ *        offset 212: gamma            ( 4 bytes)
+ *        offset 216: _pad             ( 8 bytes)
+ *  2. SIZE: the whole struct's size must be a multiple of its largest
+ *     alignment (16 here), so we pad from 216 up to 224 bytes.
+ * The WGSL side does not declare the padding: WGSL adds it implicitly.
+ *
+ * glm::mat4x4 stores its 16 floats column by column, exactly like WGSL's
+ * mat4x4f, so it can be copied as is.
+ */
+struct MyUniforms {
+	mat4x4 projectionMatrix; // camera space -> clip space (perspective)
+	mat4x4 viewMatrix;       // world space -> camera space (where we look from)
+	mat4x4 modelMatrix;      // model space -> world space (where the object is)
+	std::array<float, 4> color; // RGBA tint applied to every fragment (vec4f in WGSL)
+	float time;      // Seconds since the app started (glfwGetTime())
+	float gamma;     // 2.2 when the surface is sRGB, 1.0 otherwise (see shader)
+	float _pad[2];   // Unused, only here to reach 224 bytes (a multiple of 16)
+};
+// Have the compiler double check that we got the size right...
+static_assert(sizeof(MyUniforms) % 16 == 0, "MyUniforms must be a multiple of 16 bytes");
+// ...and that the fields really sit where WGSL expects them
+static_assert(offsetof(MyUniforms, color) == 192, "color must start right after the 3 matrices");
+static_assert(offsetof(MyUniforms, time) == 208, "time must start right after the 16-byte color");
 
 /**
  * Main application class, that holds the whole app state and regroups
@@ -96,37 +154,14 @@ class Application{
 		wgpu::TextureFormat depthTextureFormat = wgpu::TextureFormat::Depth24Plus;
 		wgpu::Texture depthTexture = nullptr;
 		wgpu::TextureView depthTextureView = nullptr;
-};
 
-/**
- * The C++ mirror of the `MyUniforms` struct declared in shader.wgsl.
- * The two MUST have the same memory layout, field for field, because we copy
- * this struct byte-for-byte into the uniform buffer.
- *
- * Memory layout rules (Step043, "More uniforms"), from the WGSL spec's
- * "address space layout constraints":
- *  1. ALIGNMENT: each field must start at an offset that is a multiple of its
- *     alignment. A vec4f has an alignment of 16 bytes, an f32 of 4 bytes.
- *     If `time` came first, `color` would start at offset 4, which is NOT a
- *     multiple of 16 and would be invalid. So the big field goes first:
- *        offset  0: color (16 bytes)
- *        offset 16: time  ( 4 bytes)
- *        offset 20: gamma ( 4 bytes)
- *        offset 24: _pad  ( 8 bytes)
- *  2. SIZE: the whole struct's size must be a multiple of its largest
- *     alignment (16 here), so we pad from 24 up to 32 bytes.
- * The WGSL side does not declare the padding: WGSL adds it implicitly.
- */
-struct MyUniforms {
-	std::array<float, 4> color; // RGBA tint applied to every fragment (vec4f in WGSL)
-	float time;      // Seconds since the app started (glfwGetTime())
-	float gamma;     // 2.2 when the surface is sRGB, 1.0 otherwise (see shader)
-	float _pad[2];   // Unused, only here to reach 32 bytes (a multiple of 16)
+		// Step055: the CPU copy of the uniforms, kept so MainLoop() can update
+		// the model matrix each frame. The pieces of the model matrix that do
+		// not change over time (scale and translation) are kept as well.
+		MyUniforms uniforms = {};
+		mat4x4 modelScale = mat4x4(1.0);       // S in the guide
+		mat4x4 modelTranslation = mat4x4(1.0); // T1 in the guide
 };
-// Have the compiler double check that we got the size right
-static_assert(sizeof(MyUniforms) % 16 == 0, "MyUniforms must be a multiple of 16 bytes");
-// ...and that color really sits where WGSL expects it (offset 0, then 16 for time)
-static_assert(offsetof(MyUniforms, time) == 16, "time must start right after the 16-byte color");
 
 int main(int, char**){
     Application app;
@@ -298,11 +333,18 @@ void Application::MainLoop(){
 	if (!targetView) return;
 
 	// Update the uniform buffer with the current time.
-	// We only overwrite the `time` field: `offsetof` gives where it sits inside
-	// MyUniforms, so the other fields keep the value set at startup.
-	// Step050: the shader now uses the time as a rotation ANGLE in radians.
-	float t = static_cast<float>(glfwGetTime());
-	queue.writeBuffer(uniformBuffer, offsetof(MyUniforms, time), &t, sizeof(float));
+	// We only overwrite the fields that change: `offsetof` gives where each
+	// one sits inside MyUniforms, so the other fields keep their values.
+	uniforms.time = static_cast<float>(glfwGetTime());
+	queue.writeBuffer(uniformBuffer, offsetof(MyUniforms, time), &uniforms.time, sizeof(MyUniforms::time));
+
+	// Step055: the spin of the pyramid is now done on the CPU. We rebuild the
+	// model matrix with the new angle (rotation around Z) and upload ONLY
+	// that matrix (64 bytes). Read right to left: scale, translate, rotate.
+	float angle1 = uniforms.time;
+	mat4x4 R1 = glm::rotate(mat4x4(1.0), angle1, vec3(0.0, 0.0, 1.0));
+	uniforms.modelMatrix = R1 * modelTranslation * modelScale;
+	queue.writeBuffer(uniformBuffer, offsetof(MyUniforms, modelMatrix), &uniforms.modelMatrix, sizeof(MyUniforms::modelMatrix));
 
 	// Create a command encoder for the draw call
 	wgpu::CommandEncoderDescriptor encoderDesc = {};
@@ -647,8 +689,13 @@ wgpu::RequiredLimits Application::GetRequiredLimits(wgpu::Adapter adapter) const
 	requiredLimits.limits.maxBindGroups = 1;
 	// Use at most 1 uniform buffer per stage
 	requiredLimits.limits.maxUniformBuffersPerShaderStage = 1;
-	// Uniform structs have a size of maximum 16 float (more than what we need)
-	requiredLimits.limits.maxUniformBufferBindingSize = 16*4;
+	// Step055: our uniform struct grew to 224 bytes (3 matrices of 64 bytes +
+	// color + time + gamma + padding). The old limit of 16 floats (64 bytes)
+	// would make the bind group invalid on wgpu-native, which applies the
+	// limits we ask for EXACTLY (Dawn silently rounds small limits up to its
+	// defaults, so it would not have complained: a backend difference!).
+	// We ask for 16*4 floats = 256 bytes.
+	requiredLimits.limits.maxUniformBufferBindingSize = 16*4*sizeof(float);
 
 	// These two limits are different because they are "minimum" limits,
 	// they are the only ones we may forward from the adapter's supported
@@ -725,11 +772,128 @@ bool Application::InitializeBuffers(){
 	uniformBuffer = device.createBuffer(bufferDesc);
 
 	//Upload the initial uniform values
-	MyUniforms uniforms = {};
+	//(`uniforms` is now a member: MainLoop() updates it every frame)
+	uniforms = {};
 	uniforms.time = 0.0f;
 	// A green tint, as in the guide (RGBA, each between 0 and 1). The shader
 	// multiplies every vertex color by it, so the white pyramid base looks green.
 	uniforms.color = { 0.0f, 1.0f, 0.4f, 1.0f };
+
+	// Step055: build the transform matrices ONCE here on the CPU, instead of
+	// for every single vertex in the shader (that was Step054). The guide
+	// shows three ways of building the same matrices; each one overwrites
+	// the previous, Option C is the one that is used.
+	//
+	// The three matrices, applied right to left to each vertex:
+	//   projection * view * model * position
+	//   - model: where the object sits in the world (scale, move, spin)
+	//   - view: where the camera is and where it looks
+	//   - projection: how the 3D view is flattened onto the screen
+
+	// --- Option A: write the matrices by hand, exactly like in Step054's
+	// shader. glm::mat4x4 also takes its numbers column by column, hence the
+	// same transpose() trick.
+	// Scale the object
+	mat4x4 S = glm::transpose(mat4x4(
+		0.3, 0.0, 0.0, 0.0,
+		0.0, 0.3, 0.0, 0.0,
+		0.0, 0.0, 0.3, 0.0,
+		0.0, 0.0, 0.0, 1.0
+	));
+
+	// Translate the object
+	mat4x4 T1 = glm::transpose(mat4x4(
+		1.0, 0.0, 0.0, 0.5,
+		0.0, 1.0, 0.0, 0.0,
+		0.0, 0.0, 1.0, 0.0,
+		0.0, 0.0, 0.0, 1.0
+	));
+
+	// Translate the view: moving the CAMERA back to z = -2 is the same as
+	// moving the whole world forward by +2, hence the minus signs.
+	vec3 focalPoint(0.0, 0.0, -2.0);
+	mat4x4 T2 = glm::transpose(mat4x4(
+		1.0, 0.0, 0.0, -focalPoint.x,
+		0.0, 1.0, 0.0, -focalPoint.y,
+		0.0, 0.0, 1.0, -focalPoint.z,
+		0.0, 0.0, 0.0, 1.0
+	));
+
+	// Rotate the object (MainLoop replaces this with the time every frame)
+	float angle1 = 2.0f; // arbitrary time
+	float c1 = std::cos(angle1);
+	float s1 = std::sin(angle1);
+	mat4x4 R1 = glm::transpose(mat4x4(
+		 c1,  s1, 0.0, 0.0,
+		-s1,  c1, 0.0, 0.0,
+		0.0, 0.0, 1.0, 0.0,
+		0.0, 0.0, 0.0, 1.0
+	));
+
+	// Rotate the view point by three 8th of a turn
+	float angle2 = 3.0f * PI / 4.0f;
+	float c2 = std::cos(angle2);
+	float s2 = std::sin(angle2);
+	mat4x4 R2 = glm::transpose(mat4x4(
+		1.0, 0.0, 0.0, 0.0,
+		0.0,  c2,  s2, 0.0,
+		0.0, -s2,  c2, 0.0,
+		0.0, 0.0, 0.0, 1.0
+	));
+
+	uniforms.modelMatrix = R1 * T1 * S;
+	uniforms.viewMatrix = T2 * R2;
+
+	// The perspective projection, by hand. The key is the last row
+	// (0, 0, 1/focalLength, 0): it makes w = z / focalLength, and the GPU
+	// then DIVIDES x, y and z by w. Far things (big z) get divided more, so
+	// they look SMALLER. That is perspective.
+	// The third row maps z from [near, far] to the depth range [0, 1]
+	// (replacing the "z * 0.5 + 0.5" trick of Step052).
+	float ratio = 640.0f / 480.0f;
+	float focalLength = 2.0;
+	float near = 0.01f;
+	float far = 100.0f;
+	float divider = 1 / (focalLength * (far - near));
+	uniforms.projectionMatrix = glm::transpose(mat4x4(
+		1.0, 0.0, 0.0, 0.0,
+		0.0, ratio, 0.0, 0.0,
+		0.0, 0.0, far * divider, -far * near * divider,
+		0.0, 0.0, 1.0 / focalLength, 0.0
+	));
+
+	// --- Option B: let GLM build each matrix for us.
+	S = glm::scale(mat4x4(1.0), vec3(0.3f));
+	T1 = glm::translate(mat4x4(1.0), vec3(0.5, 0.0, 0.0));
+	R1 = glm::rotate(mat4x4(1.0), angle1, vec3(0.0, 0.0, 1.0));
+	uniforms.modelMatrix = R1 * T1 * S;
+
+	R2 = glm::rotate(mat4x4(1.0), -angle2, vec3(1.0, 0.0, 0.0));
+	T2 = glm::translate(mat4x4(1.0), -focalPoint);
+	uniforms.viewMatrix = T2 * R2;
+
+	// --- Option C: chain GLM calls on one matrix. CAREFUL: each call
+	// multiplies on the RIGHT, so the calls are written in the OPPOSITE order
+	// of what happens to the vertex (rotate is written first but applied last).
+	mat4x4 M(1.0);
+	M = glm::rotate(M, angle1, vec3(0.0, 0.0, 1.0));
+	M = glm::translate(M, vec3(0.5, 0.0, 0.0));
+	M = glm::scale(M, vec3(0.3f));
+	uniforms.modelMatrix = M;
+
+	mat4x4 V(1.0);
+	V = glm::translate(V, -focalPoint);
+	V = glm::rotate(V, -angle2, vec3(1.0, 0.0, 0.0));
+	uniforms.viewMatrix = V;
+
+	// glm::perspective takes a vertical field of view instead of a focal
+	// length: a focal length of 2 means seeing 1 unit up for 2 units forward.
+	float fov = 2 * glm::atan(1 / focalLength);
+	uniforms.projectionMatrix = glm::perspective(fov, ratio, near, far);
+
+	// Keep the parts of the model matrix that never change, for MainLoop()
+	modelScale = S;
+	modelTranslation = T1;
 	// Gamma correction. Our colors in the .txt files are written in sRGB (the
 	// space color pickers use). If the surface is an *sRGB* format, the GPU
 	// converts linear -> sRGB when writing pixels, so we must first convert

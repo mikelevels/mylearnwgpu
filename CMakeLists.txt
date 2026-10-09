@@ -24,6 +24,11 @@ add_executable(App
 
 target_link_libraries(App PRIVATE glfw webgpu glfw3webgpu)
 
+# Step055: GLM is a header-only library copied into the glm/ folder at the
+# root of the project. Adding the project root to the include path is what
+# makes `#include <glm/glm.hpp>` work.
+target_include_directories(App PRIVATE .)
+
 # We add an option to enable different settings when developing the app than
 # when distributing it.
 option(DEV_MODE "Set up development helper settings" ON)
@@ -52,9 +57,17 @@ set_target_properties(App PROPERTIES
 	COMPILE_WARNING_AS_ERROR ON
 )
 
-# I think this is where the set all warnings as errors happens... Did this fix the issue?
+# Answer to the old question that was here ("is this where warnings become
+# errors?"): no. COMPILE_WARNING_AS_ERROR ON just above is what turns every
+# warning into an error. The block below chooses HOW MANY warnings the
+# compiler reports: /W4 (MSVC) and -Wall -Wextra -pedantic (clang/emscripten)
+# are both "a lot".
 if (MSVC)
 	target_compile_options(App PRIVATE /W4)
+	# Step055: GLM uses "nameless structs/unions", a common compiler extension
+	# that MSVC warns about at /W4 (C4201). Since warnings are errors, we turn
+	# this one off, like the guide does.
+	target_compile_options(App PRIVATE /wd4201)
 else()
 	target_compile_options(App PRIVATE -Wall -Wextra -pedantic)
 endif()
