@@ -72,4 +72,14 @@ if (EMSCRIPTEN)
 		-sASYNCIFY
 		--preload-file "${CMAKE_CURRENT_SOURCE_DIR}/resources"
 	)
+
+	# The browser cannot read files from your disk, so the resources folder is
+	# packed into App.data when the app is LINKED (--preload-file above).
+	# But the build system only re-links when a .cpp/.h file changes: editing
+	# only shader.wgsl used to say "no work to do" and the browser kept the
+	# OLD shader. LINK_DEPENDS tells the build that the link also depends on
+	# every file in resources/. CONFIGURE_DEPENDS re-scans the folder when a
+	# file is added or removed.
+	file(GLOB_RECURSE RESOURCE_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/resources/*")
+	set_target_properties(App PROPERTIES LINK_DEPENDS "${RESOURCE_FILES}")
 endif()

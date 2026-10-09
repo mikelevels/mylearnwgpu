@@ -226,5 +226,19 @@ NOTE: The depth texture size is hard-coded to the window size. It must be re-cre
 
 CONFIRMED All three builds run (wgpu, Dawn, emscripten).
 
+Step054_cpp
+
+Transformation matrices. SHADER ONLY. Scale S, translation T (4th coordinate w = 1.0, "homogeneous
+coordinates"), rotation R1 (spins with time) and R2 (tilts the view by 3/8 of a turn), applied as
+R2 * R1 * T * S * position. Matrices read RIGHT TO LEFT and the order matters. WGSL's mat4x4f() takes
+COLUMNS, so we write rows and wrap them in transpose(). See MyNotes/transformationMatrices.md.
+
+FIXED: The emscripten build now re-packs resources when ONLY a resource changes (LINK_DEPENDS in
+CMakeLists.txt). The "touch main.cpp" trick from Step043 is no longer needed.
+
+NOTE: The guide claims WGSL only has square matrices. Wrong: mat4x3f etc. exist. 4x4 is used so they chain.
+
+CONFIRMED All three builds run (wgpu, Dawn, emscripten).
+
 HERE
 

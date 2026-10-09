@@ -19,6 +19,9 @@ struct MyUniforms {
 // (the layout) and InitializeBindGroups() (the actual buffer).
 @group(0) @binding(0) var<uniform> uMyUniforms: MyUniforms;
 
+// Step054: a constant used to build rotation angles (half a turn, in radians)
+const pi = 3.14159265359;
+
 /**
  * A structure with fields labeled with vertex attribute locations can be used
  * as input to the entry point of a shader.
@@ -49,24 +52,65 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 	var out: VertexOutput; // create the output struct
 	let ratio = 640.0 / 480.0; // The width and height of the target surface
 
-	// Step050: the pyramid is centered on the origin, so no more offset.
-	// Instead it ROTATES around the X axis. The angle is the time in seconds,
-	// read as radians: one full turn every 2*pi = ~6.3 seconds.
-	let angle = uMyUniforms.time; // you can multiply it to rotate faster
+	// Step054: every transform is now a 4x4 MATRIX. A matrix "mixes" the
+	// coordinates of a vector linearly: each output coordinate is a weighted
+	// sum of the input ones, the weights being one row of the matrix.
+	//
+	// IMPORTANT: WGSL's mat4x4f(...) takes its 16 numbers COLUMN by column.
+	// We write each matrix ROW by row (the way it looks on paper) and wrap it
+	// in transpose(), which swaps rows and columns, so what you read is what
+	// you get.
 
-	// Rotating around X keeps x as is and "mixes" y and z:
-	//   y' = cos(angle) * y + sin(angle) * z
-	//   z' = cos(angle) * z - sin(angle) * y
-	// Sanity check: at angle = 0, alpha = 1 and beta = 0, so nothing moves.
-	// (The minus sign is there because swapping two axes would mirror the
-	// object; after a quarter turn z' must be -y, not +y.)
-	let alpha = cos(angle);
-	let beta = sin(angle);
-	var position = vec3f(
-		in.position.x,
-		alpha * in.position.y + beta * in.position.z,
-		alpha * in.position.z - beta * in.position.y,
-	);
+	// Scale the object: the diagonal multiplies x, y and z by 0.3
+	let S = transpose(mat4x4f(
+		0.3,  0.0, 0.0, 0.0,
+		0.0,  0.3, 0.0, 0.0,
+		0.0,  0.0, 0.3, 0.0,
+		0.0,  0.0, 0.0, 1.0,
+	));
+
+	// Translate the object by 0.5 along x.
+	// A 3x3 matrix can only MIX coordinates, it cannot ADD a constant. With
+	// a 4th coordinate w that is always 1.0, the last column adds
+	// "0.5 * w = 0.5" to x. These are "homogeneous coordinates".
+	let T = transpose(mat4x4f(
+		1.0,  0.0, 0.0, 0.5,
+		0.0,  1.0, 0.0, 0.0,
+		0.0,  0.0, 1.0, 0.0,
+		0.0,  0.0, 0.0, 1.0,
+	));
+
+	// Rotate the model in the XY plane (around the Z axis), over time.
+	// Sanity check: at angle1 = 0, c1 = 1 and s1 = 0: the identity matrix.
+	let angle1 = uMyUniforms.time;
+	let c1 = cos(angle1);
+	let s1 = sin(angle1);
+	let R1 = transpose(mat4x4f(
+		 c1,  s1, 0.0, 0.0,
+		-s1,  c1, 0.0, 0.0,
+		0.0, 0.0, 1.0, 0.0,
+		0.0, 0.0, 0.0, 1.0,
+	));
+
+	// Tilt the view point in the YZ plane (around the X axis) by three 8th
+	// of a turn (1 turn = 2 pi), so we look at the pyramid from the side.
+	// This one does not change over time.
+	let angle2 = 3.0 * pi / 4.0;
+	let c2 = cos(angle2);
+	let s2 = sin(angle2);
+	let R2 = transpose(mat4x4f(
+		1.0, 0.0, 0.0, 0.0,
+		0.0,  c2,  s2, 0.0,
+		0.0, -s2,  c2, 0.0,
+		0.0, 0.0, 0.0, 1.0,
+	));
+
+	// Compose and apply. A product of matrices reads RIGHT TO LEFT:
+	// first S (scale), then T (translate), then R1 (spin), then R2 (tilt).
+	// The order matters: T * S moves the scaled object by 0.5, but S * T
+	// would also scale the translation (0.5 * 0.3 = 0.15).
+	let homogeneous_position = vec4f(in.position, 1.0);
+	let position = (R2 * R1 * T * S * homogeneous_position).xyz;
 
 	// Step052: we now output the real depth instead of 0.0, so the depth test
 	// can tell which triangle is in front.
