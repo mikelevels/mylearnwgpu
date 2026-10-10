@@ -122,6 +122,9 @@ class Application{
         wgpu::Device device = nullptr;
         wgpu::Queue queue = nullptr;
         wgpu::Surface surface = nullptr;
+		// The settings the surface was configured with, kept to configure it
+		// again when it becomes Outdated or Lost (bug review)
+		wgpu::SurfaceConfiguration surfaceConfig = {};
 		std::unique_ptr<wgpu::ErrorCallback> uncapturedErrorCallbackHandle;
 		wgpu::TextureFormat surfaceFormat = wgpu::TextureFormat::Undefined;
 		wgpu::RenderPipeline pipeline = nullptr;
@@ -266,8 +269,10 @@ bool Application::Initialize(){
 	
 	queue = device.getQueue();
 
-	// Configure the surface
-	wgpu::SurfaceConfiguration config = {};
+	// Configure the surface. `config` is a reference to the surfaceConfig
+	// MEMBER: we keep the settings, because the surface may have to be
+	// configured again later (see GetNextSurfaceViewData).
+	wgpu::SurfaceConfiguration& config = surfaceConfig;
 
 	// Configuration of the textures created for the underlying swap chain
 	config.width = 640;
@@ -288,8 +293,10 @@ bool Application::Initialize(){
 	// Release the adapter only after it has been fully utilized
 	adapter.release();
 
-	// These substeps used to call exit(1) on failure, which skipped all
-	// cleanup. They now report failure and we pass it up to main().
+	// These substeps used to call exit(1). They now report failure and we
+	// pass it up to main(), which decides what to do. NOTE (bug review): this
+	// does NOT clean up by itself: main() returns 1 without Terminate(), and
+	// the OS frees everything when the program exits.
 	if (!InitializePipeline()) return false;
 	InitializeDepthBuffer();
 	if (!InitializeBuffers()) return false;
@@ -341,8 +348,9 @@ void Application::MainLoop(){
 	// Step055: the spin of the pyramid is now done on the CPU. We rebuild the
 	// model matrix with the new angle (rotation around Z) and upload ONLY
 	// that matrix (64 bytes). Read right to left: scale, translate, rotate.
+	// (Minus angle: see Option B in InitializeBuffers.)
 	float angle1 = uniforms.time;
-	mat4x4 R1 = glm::rotate(mat4x4(1.0), angle1, vec3(0.0, 0.0, 1.0));
+	mat4x4 R1 = glm::rotate(mat4x4(1.0), -angle1, vec3(0.0, 0.0, 1.0));
 	uniforms.modelMatrix = R1 * modelTranslation * modelScale;
 	queue.writeBuffer(uniformBuffer, offsetof(MyUniforms, modelMatrix), &uniforms.modelMatrix, sizeof(MyUniforms::modelMatrix));
 
@@ -468,6 +476,18 @@ std::pair<wgpu::SurfaceTexture, wgpu::TextureView> Application::GetNextSurfaceVi
 		// Even on failure we may have been handed a texture: give it back.
 		if (surfaceTexture.texture) {
 			wgpuTextureRelease(surfaceTexture.texture);
+		}
+		// BUG FIX (bug review): before, we only skipped the frame. An
+		// "Outdated" or "Lost" surface (e.g. after minimizing and restoring the
+		// window on wgpu-native/Vulkan) then stayed unusable forever and the
+		// window froze. Configuring it again makes it usable.
+		if (surfaceTexture.status == wgpu::SurfaceGetCurrentTextureStatus::Outdated
+			|| surfaceTexture.status == wgpu::SurfaceGetCurrentTextureStatus::Lost) {
+			int width = 0, height = 0;
+			glfwGetFramebufferSize(window, &width, &height);
+			if (width > 0 && height > 0) {// 0 x 0 while minimized: wait
+				surface.configure(surfaceConfig);
+			}
 		}
 		return { surfaceTexture, nullptr };
 	}
@@ -697,9 +717,10 @@ wgpu::RequiredLimits Application::GetRequiredLimits(wgpu::Adapter adapter) const
 	// We ask for 16*4 floats = 256 bytes.
 	requiredLimits.limits.maxUniformBufferBindingSize = 16*4*sizeof(float);
 
-	// These two limits are different because they are "minimum" limits,
-	// they are the only ones we may forward from the adapter's supported
-	// limits.
+	// These two limits are different because they are "minimum" limits: for
+	// them LOWER is better, so the adapter's own value is the best we can ask
+	// for. (Any supported value may be forwarded; these two simply have no
+	// better choice.)
 	requiredLimits.limits.minUniformBufferOffsetAlignment = supportedLimits.limits.minUniformBufferOffsetAlignment;
 	requiredLimits.limits.minStorageBufferOffsetAlignment = supportedLimits.limits.minStorageBufferOffsetAlignment;
 
@@ -855,9 +876,12 @@ bool Application::InitializeBuffers(){
 	float near = 0.01f;
 	float far = 100.0f;
 	float divider = 1 / (focalLength * (far - near));
+	// BUG FIX (bug review): x is divided by the ratio and y is left alone, like
+	// glm::perspective in Option C. The guide's version (x by 1, y by ratio)
+	// keeps the right aspect but draws everything 4/3 bigger than GLM does.
 	uniforms.projectionMatrix = glm::transpose(mat4x4(
-		1.0, 0.0, 0.0, 0.0,
-		0.0, ratio, 0.0, 0.0,
+		1.0 / ratio, 0.0, 0.0, 0.0,
+		0.0, 1.0, 0.0, 0.0,
 		0.0, 0.0, far * divider, -far * near * divider,
 		0.0, 0.0, 1.0 / focalLength, 0.0
 	));
@@ -865,7 +889,11 @@ bool Application::InitializeBuffers(){
 	// --- Option B: let GLM build each matrix for us.
 	S = glm::scale(mat4x4(1.0), vec3(0.3f));
 	T1 = glm::translate(mat4x4(1.0), vec3(0.5, 0.0, 0.0));
-	R1 = glm::rotate(mat4x4(1.0), angle1, vec3(0.0, 0.0, 1.0));
+	// BUG FIX (bug review): the hand-written R1 above is transposed, so it
+	// turns by MINUS angle1; glm::rotate turns by PLUS. -angle1 makes them
+	// match (and matches the -angle2 of R2 below). Before, the pyramid spun
+	// the other way than in Step054.
+	R1 = glm::rotate(mat4x4(1.0), -angle1, vec3(0.0, 0.0, 1.0));
 	uniforms.modelMatrix = R1 * T1 * S;
 
 	R2 = glm::rotate(mat4x4(1.0), -angle2, vec3(1.0, 0.0, 0.0));
@@ -876,7 +904,7 @@ bool Application::InitializeBuffers(){
 	// multiplies on the RIGHT, so the calls are written in the OPPOSITE order
 	// of what happens to the vertex (rotate is written first but applied last).
 	mat4x4 M(1.0);
-	M = glm::rotate(M, angle1, vec3(0.0, 0.0, 1.0));
+	M = glm::rotate(M, -angle1, vec3(0.0, 0.0, 1.0));// minus: see Option B
 	M = glm::translate(M, vec3(0.5, 0.0, 0.0));
 	M = glm::scale(M, vec3(0.3f));
 	uniforms.modelMatrix = M;

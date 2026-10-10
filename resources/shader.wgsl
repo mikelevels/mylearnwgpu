@@ -71,11 +71,13 @@ fn makeOrthographicProj(ratio: f32, near: f32, far: f32, scale: f32) -> mat4x4f 
  * w ("perspective division"), so the farther a point is (big z), the closer to
  * the center of the screen it ends up: far things look smaller.
  */
+// BUG FIX (bug review): x scaled by focalLength/ratio and y by focalLength,
+// like glm::perspective (the guide's version was 4/3 bigger than it).
 fn makePerspectiveProj(ratio: f32, near: f32, far: f32, focalLength: f32) -> mat4x4f {
 	let divides = 1.0 / (far - near);
 	return transpose(mat4x4f(
-		focalLength,         0.0,              0.0,               0.0,
-		    0.0,     focalLength * ratio,      0.0,               0.0,
+		focalLength / ratio, 0.0,              0.0,               0.0,
+		    0.0,     focalLength,              0.0,               0.0,
 		    0.0,             0.0,         far * divides, -far * near * divides,
 		    0.0,             0.0,              1.0,               0.0,
 	));

@@ -1,4 +1,6 @@
-cmake_minimum_required(VERSION 3.0...3.25)
+# BUG FIX (bug review): was 3.0. We use COMPILE_WARNING_AS_ERROR, which only
+# exists since CMake 3.24: an older CMake would silently ignore it.
+cmake_minimum_required(VERSION 3.24...3.31)
 project(
 	LearnWebGPU
 	VERSION 0.1.0
@@ -33,7 +35,16 @@ target_include_directories(App PRIVATE .)
 # when distributing it.
 option(DEV_MODE "Set up development helper settings" ON)
 
-if(DEV_MODE)
+if(EMSCRIPTEN)
+    # In the browser, the resources folder is packed into App.data and mounted
+    # at /resources in the virtual file system (see --preload-file below), in
+    # BOTH modes. BUG FIX (bug review): before, the folder kept your absolute
+    # Windows path inside the browser, so DEV_MODE=OFF ("./resources") could
+    # not find the files, and your disk path was baked into the web page.
+    target_compile_definitions(App PRIVATE
+        RESOURCE_DIR="/resources"
+    )
+elseif(DEV_MODE)
     # In dev mode, we load resources from the source tree, so that when we
     # dynamically edit resources (like shaders), these are correctly
     # versionned.
@@ -83,7 +94,8 @@ if (EMSCRIPTEN)
 	set_target_properties(App PROPERTIES SUFFIX ".html")
 	target_link_options(App PRIVATE
 		-sASYNCIFY
-		--preload-file "${CMAKE_CURRENT_SOURCE_DIR}/resources"
+		# "@/resources": where the folder appears in the browser (RESOURCE_DIR above)
+		--preload-file "${CMAKE_CURRENT_SOURCE_DIR}/resources@/resources"
 	)
 
 	# The browser cannot read files from your disk, so the resources folder is

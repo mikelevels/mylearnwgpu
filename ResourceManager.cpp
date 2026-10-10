@@ -1,6 +1,7 @@
 #include "ResourceManager.h"
 
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <string>
 
@@ -91,11 +92,14 @@ bool ResourceManager::loadGeometry(
         if (!file.is_open()) {
             return nullptr;
         }
-        file.seekg(0, std::ios::end);
-        size_t size = file.tellg();
-        std::string shaderSource(size, ' ');
-        file.seekg(0);
-        file.read(shaderSource.data(), size);
+        // BUG FIX: we used to measure the file with tellg() and read that many
+        // characters, but on Windows a text-mode read turns each "\r\n" into
+        // "\n", so fewer characters arrive than measured (the rest stayed as
+        // padding spaces). Reading until the end of the stream gets exactly
+        // what is there.
+        std::string shaderSource(
+            (std::istreambuf_iterator<char>(file)),
+            std::istreambuf_iterator<char>());
 
         wgpu::ShaderModuleWGSLDescriptor shaderCodeDesc{};
         shaderCodeDesc.chain.next = nullptr;
