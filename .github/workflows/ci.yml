@@ -1,0 +1,254 @@
+# CI: GitHub builds the app and runs the analysis tools on every push and
+# every pull request, on GitHub's own computers ("runners"), even when your PC
+# is off.
+#
+# WHAT RUNS (each "job" below is a separate check on the pull request page):
+#   Build (WGPU)        Windows, Visual Studio 2022, wgpu-native v0.19.4.1, Debug
+#   Build (DAWN)        Windows, Visual Studio 2022, Dawn 6536 (WebGPU-distribution)
+#   Build (Emscripten)  Linux, Emscripten 3.1.63, the browser version
+#
+# Same workflow as updatedMyLearnWebGPU's; only the versions differ.
+#   Checks              lizard (25 code lines), Cppcheck, clang-tidy, Doxygen
+#
+# A red X on a job means it failed; click it to read the log. The build jobs
+# compile with the same /W4 + warnings-as-errors as your PC (CMakeLists.txt),
+# so any warning fails the build.
+#
+# NOTHING HERE RUNS THE APP: GitHub's computers have no GPU and no screen.
+# CI tells you "it compiles and the tools are happy", not "it draws correctly".
+#
+# The repository is public, so GitHub Actions minutes are free. The build
+# cache (Dawn) is limited to 10 GB per repository; GitHub deletes the oldest
+# cache when it is full.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Adds a "Run workflow" button on the Actions tab, to run it by hand
+  workflow_dispatch:
+
+# Read-only access to the repository is all CI needs
+permissions:
+  contents: read
+
+jobs:
+  #############################################################################
+  build-wgpu:
+    name: Build (WGPU)
+    # windows-2022 has Visual Studio 2022, the same compiler as your PC
+    # (VS 2022 17.14). windows-latest may move to a newer Visual Studio.
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same as running vcvars64.bat: puts the x64 compiler (cl.exe) on PATH
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Ninja
+        run: pip install ninja
+
+      # wgpu-native v0.19.4.1 is downloaded (prebuilt) by webgpu/webgpu.cmake
+      - name: Configure
+        run: cmake -G Ninja -B build-wgpu -DCMAKE_BUILD_TYPE=Debug -DWEBGPU_BACKEND=WGPU
+
+      - name: Build
+        run: cmake --build build-wgpu --target App
+
+  #############################################################################
+  build-dawn:
+    name: Build (DAWN)
+    runs-on: windows-2022
+    # webgpu/webgpu.cmake downloads WebGPU-distribution's dawn-6536 branch,
+    # which builds Dawn from source. The FIRST Dawn build compiles all of Dawn and Tint (thousands of files)
+    # on a 4-core computer, which can take a few hours. Later runs reuse the
+    # cache below and only compile what changed.
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # Dawn's fetch script needs Python 3
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ninja
+        run: pip install ninja
+
+      # THE DAWN CACHE
+      # The whole build-dawn folder (Dawn's source + compiled objects) is
+      # saved after a build and restored before the next one. The name ("key")
+      # changes when CMakeLists.txt or webgpu/ change; the restore then
+      # falls back to the newest older cache, so only the difference is
+      # rebuilt.
+      - name: Restore the Dawn build cache
+        id: restore
+        uses: actions/cache/restore@v4
+        with:
+          path: build-dawn
+          key: dawn-6536-release-${{ hashFiles('CMakeLists.txt', 'webgpu/**') }}-${{ github.run_id }}
+          restore-keys: |
+            dawn-6536-release-${{ hashFiles('CMakeLists.txt', 'webgpu/**') }}-
+            dawn-6536-release-
+
+      # Release (not Debug like on your PC): Dawn's Debug build with its
+      # debug symbols is several times bigger, too big for the 10 GB cache.
+      - name: Configure
+        run: cmake -G Ninja -B build-dawn -DCMAKE_BUILD_TYPE=Release -DWEBGPU_BACKEND=DAWN
+
+      # Builds Dawn and the App together. The cache below is saved even if
+      # YOUR code fails to compile, so the next run doesn't rebuild Dawn.
+      - name: Build Dawn and App
+        id: dawn
+        run: |
+          cmake --build build-dawn --target App | Tee-Object -FilePath dawn-build.log
+          $ok = $LASTEXITCODE
+          # "no work to do" = everything came from the cache: no need to save
+          $rebuilt = -not (Select-String -Path dawn-build.log -Pattern "no work to do" -Quiet)
+          "rebuilt=$rebuilt" >> $env:GITHUB_OUTPUT
+          exit $ok
+
+      # Saved even when the Dawn build failed or timed out half-way, so the
+      # next run continues from where this one stopped.
+      - name: Save the Dawn build cache
+        if: ${{ !cancelled() && (steps.dawn.outputs.rebuilt == 'True' || steps.dawn.outcome == 'failure') }}
+        uses: actions/cache/save@v4
+        with:
+          path: build-dawn
+          key: dawn-6536-release-${{ hashFiles('CMakeLists.txt', 'webgpu/**') }}-${{ github.run_id }}
+
+  #############################################################################
+  build-emscripten:
+    name: Build (Emscripten)
+    # The browser build does not depend on Windows, and Linux runners start
+    # faster. Same Emscripten version as C:\Users\gonza\Dev\Lib\emsdk (3.1.63).
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.63
+
+      - name: Install Ninja
+        run: sudo apt-get install -y ninja-build
+
+      # Same commands as in MYNOTES.md
+      - name: Configure
+        run: emcmake cmake -B build-emscripten -G Ninja
+
+      - name: Build
+        run: cmake --build build-emscripten
+
+      # The web page you can download from the run's summary page and open
+      # with any small web server (for example: python -m http.server)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: |
+            build-emscripten/App.html
+            build-emscripten/App.js
+            build-emscripten/App.wasm
+            build-emscripten/App.data
+          retention-days: 7
+
+  #############################################################################
+  checks:
+    name: Checks
+    runs-on: windows-2022
+    timeout-minutes: 30
+    # Bash for the check scripts below (Git for Windows' bash is installed)
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # Same versions as on your PC where possible (Dev\Tools\README-tools.md)
+      - name: Install the tools
+        run: |
+          pip install ninja lizard==1.24.1
+          choco install cppcheck --no-progress -y
+          echo "C:/Program Files/Cppcheck" >> "$GITHUB_PATH"
+
+      # Only CONFIGURE: Cppcheck and clang-tidy read compile_commands.json
+      # (every compiler command) to see your code exactly as the compiler does.
+      - name: Configure (WGPU, compile_commands.json)
+        id: configure
+        shell: pwsh
+        run: cmake -G Ninja -B build-checks -DCMAKE_BUILD_TYPE=Debug -DWEBGPU_BACKEND=WGPU -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: List your own files
+        run: |
+          python .github/scripts/own_files.py | tee own-files.txt
+          python .github/scripts/own_files.py --cpp > own-cpp.txt
+
+      # Your rule: no function longer than 25 CODE lines (comments and blank
+      # lines don't count). -w prints only the functions over the limit.
+      - name: lizard (functions over 25 code lines)
+        if: ${{ !cancelled() && steps.configure.outcome == 'success' }}
+        run: python -m lizard -l cpp -Tnloc=25 -w $(cat own-files.txt)
+
+      # --error-exitcode=1 because Cppcheck exits 0 even when it finds
+      # something. The style checks are ON (the sweep's FINAL.md advised it).
+      # Third-party headers your files include are skipped with --suppress.
+      - name: Cppcheck
+        if: ${{ !cancelled() && steps.configure.outcome == 'success' }}
+        run: |
+          filters=()
+          for f in $(cat own-cpp.txt); do filters+=("--file-filter=*$(basename "$f")"); done
+          cppcheck --project=build-checks/compile_commands.json "${filters[@]}" \
+            --enable=warning,performance,portability,style \
+            --inline-suppr \
+            --suppress=missingIncludeSystem \
+            --suppress='*:*glm*' --suppress='*:*webgpu.hpp' --suppress='*:*glfw*' \
+            --error-exitcode=1 --quiet
+
+      # clang-tidy, with the checks that find BUGS (not style):
+      #   clang-analyzer-*    follows each path through a function (null, leaks)
+      #   bugprone-*          common mistakes (minus 3 that are mostly noise
+      #                       for graphics code: swapped parameters, narrowing
+      #                       and widening conversions)
+      #   -Wdocumentation     Doxygen comments that don't match the code
+      #   -Wthread-safety     data used without its lock (none yet; ready for later)
+      # Style checks like misc-const-correctness are left out on purpose:
+      # they would fail CI over things that are not bugs.
+      - name: clang-tidy
+        if: ${{ !cancelled() && steps.configure.outcome == 'success' }}
+        run: |
+          headers=$(python .github/scripts/own_files.py --headers | xargs -n1 basename | sed 's/\./\\./g' | paste -sd'|')
+          clang-tidy --version
+          clang-tidy -p build-checks --quiet \
+            --checks='-*,clang-analyzer-*,bugprone-*,-bugprone-easily-swappable-parameters,-bugprone-narrowing-conversions,-bugprone-implicit-widening-of-multiplication-result,clang-diagnostic-documentation*,clang-diagnostic-thread-safety*' \
+            --warnings-as-errors='*' \
+            --header-filter="($headers)\$" \
+            --extra-arg=-Wdocumentation --extra-arg=-Wthread-safety \
+            $(cat own-cpp.txt)
+
+      # Doxygen runs only when the project has a Doxyfile. The Doxyfile on your
+      # PC points DOT_PATH at C:\Users\gonza\Dev\Tools\graphviz..., which does
+      # not exist here, so CI turns the graphs off (HAVE_DOT=NO). Warnings are
+      # still errors when your Doxyfile says WARN_AS_ERROR = FAIL_ON_WARNINGS.
+      - name: Doxygen
+        if: ${{ !cancelled() && steps.configure.outcome == 'success' }}
+        run: |
+          if [ ! -f Doxyfile ]; then
+            echo "::notice::No Doxyfile in the repository yet, Doxygen skipped."
+            exit 0
+          fi
+          choco install doxygen.install --no-progress -y
+          { cat Doxyfile; echo "HAVE_DOT = NO"; echo "DOT_PATH ="; } | "C:/Program Files/doxygen/bin/doxygen.exe" -
